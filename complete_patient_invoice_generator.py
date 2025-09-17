@@ -645,7 +645,7 @@ class PatientInvoiceGenerator:
                     
                     table_data.append([
                         display_date,
-                        "Mental Health Visit",
+                        "Psychotherapy and/or Med Management",
                         f'$ {paid_amount:.2f}' if paid_amount > 0 else '$ -',
                         f'$ {copay_amount:.2f}' if copay_amount > 0 else '$ -'  # FIXED: Show actual copay amount
                     ])
