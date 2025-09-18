@@ -68,7 +68,7 @@ class PatientInvoiceGenerator:
         self.statement_date = datetime.strptime(statement_date, "%Y-%m-%d") if statement_date else datetime.now()
         self.payment_due_date = self._calculate_payment_due_date()
         
-        # Column mapping for normalization
+        # Column mapping for normalization - UPDATED
         self.column_aliases = {
             'name': ["Name", "Patient Name", "[LastName, FirstName]"],
             'visit_date': ["Visit Date", "Service Date", "DOS", "Date of Service"],
@@ -76,7 +76,8 @@ class PatientInvoiceGenerator:
             'copay': ["Copay", "Co-pay", "Copayment"],
             'paid': ["Paid", "Patient Paid", "Payments"],
             'previous_balance': ["Previous Balance", "Outstanding Balance", "Prior Balance", "Carryover"],
-            'insurance': ["Insurance"]
+            'insurance': ["Insurance"],
+            'type_of_service': ["Type Of Service", "Service Type", "Description", "Service Description"]  # NEW
         }
         
         # Setup logging
@@ -195,14 +196,6 @@ class PatientInvoiceGenerator:
                         return name
                 return None
             
-            # If the data appears to be space-separated (like the Catherine example), 
-            # we may need to parse it differently
-            if len(df.columns) == 1 and ' ' in str(df.iloc[0, 0]):
-                # Looks like space-separated data in a single column
-                self.logger.warning("Detected space-separated data - attempting to parse")
-                parsed_patients = self._parse_space_separated_roster(df)
-                return parsed_patients
-            
             # Standard CSV processing
             prn_col = find_column(df, possible_prn_cols)
             first_col = find_column(df, possible_first_cols) 
@@ -258,76 +251,7 @@ class PatientInvoiceGenerator:
             self.logger.error(f"Error loading patient roster: {e}")
             raise
     
-    def _parse_space_separated_roster(self, df: pd.DataFrame) -> Dict[str, PatientData]:
-        """Parse space-separated patient data"""
-        patients = {}
-        
-        for _, row in df.iterrows():
-            try:
-                # Get the full row as string and split by spaces
-                row_data = str(row.iloc[0]).split()
-                
-                if len(row_data) >= 3:
-                    # Assuming format: PRN FirstName LastName ... (rest of data)
-                    prn = row_data[0]
-                    first_name = row_data[1]
-                    last_name = row_data[2]
-                    
-                    # Try to extract address components if available
-                    address_line1 = ""
-                    city = ""
-                    state = ""
-                    postal_code = ""
-                    
-                    # Look for address patterns in the remaining data
-                    if len(row_data) > 10:  # Assuming address exists
-                        for i, item in enumerate(row_data[7:], 7):  # Start after basic info
-                            if item.isdigit() and len(item) >= 3:  # Likely a street number
-                                # Try to reconstruct address
-                                addr_parts = row_data[i:i+3] if i+3 < len(row_data) else row_data[i:]
-                                address_line1 = " ".join(addr_parts)
-                                break
-                        
-                        # Look for state (2-letter code)
-                        for item in row_data:
-                            if len(item) == 2 and item.isupper():
-                                state = item
-                                break
-                        
-                        # Look for zip code (5 digits)
-                        for item in row_data:
-                            if item.isdigit() and len(item) == 5:
-                                postal_code = item
-                                break
-                            elif '.' in item and item.replace('.', '').isdigit():
-                                # Remove decimal formatting
-                                postal_code = item.split('.')[0]
-                                break
-                    
-                    patient = PatientData(
-                        prn=prn,
-                        first_name=first_name,
-                        last_name=last_name,
-                        dob="",
-                        address_line1=address_line1,
-                        address_line2="",
-                        city=city,
-                        state=state,
-                        postal_code=postal_code
-                    )
-                    
-                    # Create lookup keys
-                    patients[f"prn_{prn}"] = patient
-                    name_key = f"{first_name.lower()}_{last_name.lower()}"
-                    if name_key not in patients:
-                        patients[name_key] = patient
-                        
-            except Exception as e:
-                self.logger.warning(f"Error parsing row: {row.iloc[0]} - {e}")
-                continue
-        
-        return patients
-    
+    # Update the load_invoice_data method to include the new column
     def load_invoice_data(self, invoice_file: str, custom_mapping: Dict = None) -> pd.DataFrame:
         """Load invoice Excel file and normalize columns"""
         try:
@@ -344,8 +268,8 @@ class PatientInvoiceGenerator:
                     raise ValueError(f"Required column '{col}' not found. Available columns: {list(df.columns)}")
                 column_mapping[actual_col] = col
             
-            # Optional columns
-            optional_columns = ['previous_balance', 'insurance']
+            # Optional columns - UPDATED
+            optional_columns = ['previous_balance', 'insurance', 'type_of_service']
             for col in optional_columns:
                 actual_col = self._normalize_column_name(df, col, custom_mapping)
                 if actual_col:
@@ -359,12 +283,17 @@ class PatientInvoiceGenerator:
                 df['previous_balance'] = 0
             if 'insurance' not in df.columns:
                 df['insurance'] = ''
+            if 'type_of_service' not in df.columns:  # NEW
+                df['type_of_service'] = ''
             
             # Clean and convert data types
             df['total_amount'] = pd.to_numeric(df['total_amount'], errors='coerce').fillna(0)
             df['copay'] = pd.to_numeric(df['copay'], errors='coerce').fillna(0)
             df['paid'] = pd.to_numeric(df['paid'], errors='coerce').fillna(0)
             df['previous_balance'] = pd.to_numeric(df['previous_balance'], errors='coerce').fillna(0)
+            
+            # Clean type_of_service column - NEW
+            df['type_of_service'] = df['type_of_service'].fillna('').astype(str)
             
             return df
             
@@ -478,6 +407,7 @@ class PatientInvoiceGenerator:
         self.logger.warning(f"No patient match found for: {name}")
         return None, False
     
+    # Update the _generate_invoice_lines method to use the service type
     def _generate_invoice_lines(self, patient_df: pd.DataFrame) -> Tuple[List[InvoiceLine], float, pd.DataFrame]:
         """Generate invoice lines for a patient"""
         lines = []
@@ -494,14 +424,19 @@ class PatientInvoiceGenerator:
                 is_previous_balance=True
             ))
         
-        # Process service lines
+        # Process service lines - UPDATED
         for _, row in patient_df.iterrows():
             amount_due = self._calculate_amount_due(row)
             
             if amount_due > 0:  # Only include lines with amounts due
+                # Get service type from the new column, use default if empty
+                service_type = row.get('type_of_service', '').strip()
+                if not service_type:
+                    service_type = "Psychotherapy and/or Med Management"  # Default
+                
                 lines.append(InvoiceLine(
                     service_date=str(row['visit_date']),
-                    description="Psychotherapy and/or Medication Management",
+                    description=service_type,  # Use the actual service type
                     amount=amount_due,
                     is_previous_balance=False
                 ))
@@ -513,6 +448,7 @@ class PatientInvoiceGenerator:
         
         return lines, total_due, patient_df
     
+    # Update the _generate_pdf_invoice method to use dynamic descriptions
     def _generate_pdf_invoice(self, patient: PatientData, lines: List[InvoiceLine], 
                             total_due: float, patient_df: pd.DataFrame, output_path: Path):
         """Generate PDF invoice"""
@@ -555,7 +491,6 @@ class PatientInvoiceGenerator:
             story.append(Spacer(1, 20))
             
             # Patient information and payment instructions side by side
-            # Clean up postal code for display
             display_postal = patient.postal_code
             if display_postal and '.' in display_postal:
                 display_postal = display_postal.split('.')[0]
@@ -581,8 +516,8 @@ class PatientInvoiceGenerator:
 
             combined_table = Table(combined_info, colWidths=[3*inch, 3*inch])
             combined_table.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),  # Patient info bold
-                ('FONTNAME', (1, 0), (1, 0), 'Helvetica-Bold'),  # Payment info bold
+                ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (1, 0), (1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, -1), 10),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                 ('LEFTPADDING', (0, 0), (-1, -1), 0),
@@ -612,7 +547,7 @@ class PatientInvoiceGenerator:
             story.append(statement_table)
             story.append(Spacer(1, 20))
             
-            # Service details table - FIXED SECTION
+            # Service details table
             table_data = [['Service Date(s)', 'Description', 'Amount Paid', 'Copay/Deductible']]
 
             total_paid = 0
@@ -624,34 +559,39 @@ class PatientInvoiceGenerator:
                     table_data.append([
                         '',
                         'Previous Balance',
-                        '$ -',  # Previous balance is NOT a payment
-                        f'$ {line.amount:.2f}'  # This is amount still owed
+                        '$ -',
+                        f'$ {line.amount:.2f}'
                     ])
                     total_copay += line.amount
-                    break  # Only one previous balance
+                    break
 
-            # Then process all invoice rows to show services and payments
+            # Then process all invoice rows to show services and payments - UPDATED
             for _, row in patient_df.iterrows():
                 visit_date_str = str(row['visit_date'])
                 paid_amount = float(row.get('paid', 0))
-                copay_amount = float(row.get('copay', 0))  # Get the actual copay amount
+                copay_amount = float(row.get('copay', 0))
                 
-                # Show all rows that have any activity (payment, copay, or amount due)
+                # Show all rows that have any activity
                 amount_due = self._calculate_amount_due(row)
                 
                 if amount_due > 0 or paid_amount > 0 or copay_amount > 0:
-                    # Format the date for display (just the date part)
+                    # Format the date for display
                     display_date = visit_date_str.split()[0] if visit_date_str else ''
+                    
+                    # Get service description - UPDATED
+                    service_type = row.get('type_of_service', '').strip()
+                    if not service_type:
+                        service_type = "Mental Health Visit"  # Default for table display
                     
                     table_data.append([
                         display_date,
-                        "Psychotherapy and/or Med Management",
+                        service_type,  # Use the actual service type
                         f'$ {paid_amount:.2f}' if paid_amount > 0 else '$ -',
-                        f'$ {copay_amount:.2f}' if copay_amount > 0 else '$ -'  # FIXED: Show actual copay amount
+                        f'$ {copay_amount:.2f}' if copay_amount > 0 else '$ -'
                     ])
                     
                     total_paid += paid_amount
-                    total_copay += copay_amount  # FIXED: Add actual copay to total
+                    total_copay += copay_amount
 
             # Add subtotal row
             table_data.append(['', 'SUBTOTAL', f'$ {total_paid:.2f}', f'$ {total_copay:.2f}'])
@@ -714,7 +654,7 @@ class PatientInvoiceGenerator:
             )
 
             story.append(Paragraph("_________________________________", signature_style))
-            story.append(Spacer(1, 12))  # Add extra space between signature label and line
+            story.append(Spacer(1, 12))
             story.append(Paragraph("Provider Signature - Michael Levinson, MD", signature_style))
             
             # Build the document
@@ -827,6 +767,107 @@ class PatientInvoiceGenerator:
         except Exception as e:
             self.logger.error(f"Error generating cover letter: {e}")
             raise
+
+    def _generate_envelope_pdf(self, patient: PatientData, template_file: str, output_path: Path):
+        """Generate envelope PDF sized for Com-10 envelopes (4.13" x 9.5") - single page"""
+        try:
+            # Com-10 envelope dimensions
+            envelope_width = 9.5 * inch
+            envelope_height = 4.13 * inch
+            envelope_size = (envelope_width, envelope_height)
+            
+            doc = SimpleDocTemplate(str(output_path), pagesize=envelope_size,
+                                topMargin=0.2*inch, bottomMargin=0.2*inch,
+                                leftMargin=0.2*inch, rightMargin=0.2*inch)
+            
+            story = []
+            styles = getSampleStyleSheet()
+            
+            # Return address style (top-left, very compact)
+            return_address_style = ParagraphStyle(
+                'ReturnAddress',
+                parent=styles['Normal'],
+                fontSize=10,
+                alignment=TA_LEFT,
+                spaceAfter=0,
+                spaceBefore=0,
+                fontName='Helvetica',
+                leftIndent=0,
+                leading=12  # Tight line spacing
+            )
+            
+            return_address_bold_style = ParagraphStyle(
+                'ReturnAddressBold',
+                parent=styles['Normal'],
+                fontSize=11,
+                alignment=TA_LEFT,
+                spaceAfter=1,
+                spaceBefore=0,
+                fontName='Helvetica-Bold',
+                leftIndent=0,
+                leading=12
+            )
+            
+            # Delivery address style (center area, compact)
+            delivery_address_style = ParagraphStyle(
+                'DeliveryAddress',
+                parent=styles['Normal'],
+                fontSize=10,
+                alignment=TA_LEFT,
+                spaceAfter=0,
+                spaceBefore=0,
+                fontName='Helvetica',
+                leftIndent=3.5*inch,  # Position for Com-10 envelope
+                leading=12  # Tight line spacing
+            )
+            
+            delivery_name_style = ParagraphStyle(
+                'DeliveryName',
+                parent=styles['Normal'],
+                fontSize=11,
+                alignment=TA_LEFT,
+                spaceAfter=2,
+                spaceBefore=0,
+                fontName='Helvetica-Bold',
+                leftIndent=3.5*inch,
+                leading=12
+            )
+            
+            # Return Address (very compact, top-left)
+            story.append(Paragraph("<b>Access Multi-Specialty</b>", return_address_bold_style))
+            story.append(Paragraph("<b>Medical Clinic, Inc.</b>", return_address_bold_style))
+            story.append(Paragraph("PO Box 351", return_address_style))
+            story.append(Paragraph("Burlingame, CA 94011", return_address_style))
+            
+            # Minimal spacing between return and delivery address
+            story.append(Spacer(1, 1*inch))
+            
+            # Delivery Address (center-right)
+            display_postal = patient.postal_code
+            if display_postal and '.' in display_postal:
+                display_postal = display_postal.split('.')[0]
+            
+            # Patient name
+            patient_full_name = f"{patient.first_name} {patient.last_name}"
+            story.append(Paragraph(f"<b>{patient_full_name}</b>", delivery_name_style))
+            
+            # Patient address
+            if patient.address_line1:
+                story.append(Paragraph(patient.address_line1, delivery_address_style))
+            if patient.address_line2:
+                story.append(Paragraph(patient.address_line2, delivery_address_style))
+            
+            # City, State ZIP
+            city_state_zip = f"{patient.city}, {patient.state} {display_postal}"
+            story.append(Paragraph(city_state_zip, delivery_address_style))
+            
+            # Build the document
+            doc.build(story)
+            self.logger.info(f"Generated Com-10 envelope PDF: {output_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Error generating envelope PDF: {e}")
+            raise
     
     def _generate_csv_export(self, lines: List[InvoiceLine], output_path: Path):
         """Generate CSV line items export"""
@@ -905,6 +946,7 @@ class PatientInvoiceGenerator:
                 f.write("For each processed patient:\n")
                 f.write("  - PDF Invoice: LastName_Year_Invoice_mmddyyyy.pdf\n")
                 f.write("  - Cover Letter: LastName_Year_Envelope_mmddyyyy.docx\n")
+                f.write("  - Envelope PDF: LastName_Year_Envelope_mmddyyyy.pdf\n")
                 f.write("  - CSV Items: LastName_Year_InvoiceItems_mmddyyyy.csv\n\n")
                 
                 f.write("=" * 80 + "\n")
@@ -918,8 +960,9 @@ class PatientInvoiceGenerator:
             raise
     
     def generate_invoices(self, roster_file: str, invoice_file: str, 
-                        template_file: str, output_dir: str = "output",
-                        custom_mapping: Dict = None, generate_csv: bool = True):
+                         template_file: str, output_dir: str = "output",
+                         custom_mapping: Dict = None, generate_csv: bool = True,
+                         envelope_format: str = "both"):
         """Main method to generate all invoices and cover letters"""
         # Initialize summary tracking
         summary = ProcessingSummary(
@@ -988,10 +1031,16 @@ class PatientInvoiceGenerator:
                     
                     # Generate files using the matched patient data
                     pdf_path = patient_dir / f"{base_name}_Invoice_{date_str}.pdf"
-                    docx_path = patient_dir / f"{base_name}_Envelope_{date_str}.docx"
-                    
                     self._generate_pdf_invoice(file_patient, lines, total_due, original_df, pdf_path)
-                    self._generate_cover_letter(file_patient, template_file, docx_path)
+
+                    # Generate envelope in requested format(s)
+                    if envelope_format in ["docx", "both"]:
+                        docx_path = patient_dir / f"{base_name}_Envelope_{date_str}.docx"
+                        self._generate_cover_letter(file_patient, template_file, docx_path)
+                    
+                    if envelope_format in ["pdf", "both"]:
+                        envelope_pdf_path = patient_dir / f"{base_name}_Envelope_{date_str}.pdf"
+                        self._generate_envelope_pdf(file_patient, template_file, envelope_pdf_path)
                     
                     if generate_csv:
                         csv_path = patient_dir / f"{base_name}_InvoiceItems_{date_str}.csv"
@@ -1014,7 +1063,7 @@ class PatientInvoiceGenerator:
             self._generate_summary_report(summary, output_path)
             
             self.logger.info(f"Processing complete. Generated: {summary.total_processed}, "
-                        f"Skipped: {summary.total_skipped}, Errors: {summary.total_errors}")
+                           f"Skipped: {summary.total_skipped}, Errors: {summary.total_errors}")
             
             return summary
             
@@ -1027,17 +1076,18 @@ class PatientInvoiceGenerator:
 def main():
     """Example usage"""
     generator = PatientInvoiceGenerator(
-        amount_due_strategy="auto",
-        statement_date=datetime.now().strftime("%Y-%m-%d")  # This will be today's date
+        amount_due_strategy="auto"
+        # Use today's date automatically
     )
     
     try:
         summary = generator.generate_invoices(
             roster_file="PatientListReport_active_20250912.csv",
-            invoice_file="inv1.xlsx", 
+            invoice_file="invoice_template.xlsx", 
             template_file="Access Multi Letter Cover.docx",
             output_dir="output",
-            generate_csv=True
+            generate_csv=True,
+            envelope_format="both"  # Options: "docx", "pdf", or "both"
         )
         
         if summary:
@@ -1055,4 +1105,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
