@@ -251,6 +251,45 @@ class PatientInvoiceGenerator:
             self.logger.error(f"Error loading patient roster: {e}")
             raise
     
+    # Add this helper method to format dates consistently
+    def _format_date_for_display(self, date_value) -> str:
+        """Format date value to MM/DD/YYYY format"""
+        if pd.isna(date_value) or date_value == '' or date_value is None:
+            return ''
+        
+        try:
+            # Convert to string first
+            date_str = str(date_value)
+            
+            # Try to parse as datetime if it's not already
+            if isinstance(date_value, str):
+                # Handle different possible input formats
+                for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d']:
+                    try:
+                        parsed_date = datetime.strptime(date_str.split()[0], fmt)  # Take only date part
+                        return parsed_date.strftime('%m/%d/%Y')
+                    except ValueError:
+                        continue
+            elif hasattr(date_value, 'strftime'):
+                # If it's already a datetime object
+                return date_value.strftime('%m/%d/%Y')
+            
+            # If we can't parse it, try to extract date from string
+            date_part = date_str.split()[0] if ' ' in date_str else date_str
+            
+            # Try pandas to_datetime as last resort
+            parsed_date = pd.to_datetime(date_part, errors='coerce')
+            if not pd.isna(parsed_date):
+                return parsed_date.strftime('%m/%d/%Y')
+            
+            # If all else fails, return the original string
+            return date_part
+            
+        except Exception as e:
+            # Log the error but don't break the process
+            self.logger.warning(f"Could not format date '{date_value}': {e}")
+            return str(date_value) if date_value else ''
+
     # Update the load_invoice_data method to include the new column
     def load_invoice_data(self, invoice_file: str, custom_mapping: Dict = None) -> pd.DataFrame:
         """Load invoice Excel file and normalize columns"""
@@ -547,15 +586,18 @@ class PatientInvoiceGenerator:
             story.append(statement_table)
             story.append(Spacer(1, 20))
             
-            # Service details table
+# Replace the entire table generation section in _generate_pdf_invoice with this corrected version:
+
+            # Service details table - CORRECTED VERSION
             table_data = [['Service Date(s)', 'Description', 'Amount Paid', 'Copay/Deductible']]
 
             total_paid = 0
             total_copay = 0
 
             # First, handle any previous balance
+            previous_balance_added = False
             for line in lines:
-                if line.is_previous_balance:
+                if line.is_previous_balance and not previous_balance_added:
                     table_data.append([
                         '',
                         'Previous Balance',
@@ -563,11 +605,12 @@ class PatientInvoiceGenerator:
                         f'$ {line.amount:.2f}'
                     ])
                     total_copay += line.amount
+                    previous_balance_added = True
                     break
 
-            # Then process all invoice rows to show services and payments - UPDATED
+            # Then process all invoice rows to show services and payments
             for _, row in patient_df.iterrows():
-                visit_date_str = str(row['visit_date'])
+                visit_date_raw = row['visit_date']
                 paid_amount = float(row.get('paid', 0))
                 copay_amount = float(row.get('copay', 0))
                 
@@ -575,17 +618,18 @@ class PatientInvoiceGenerator:
                 amount_due = self._calculate_amount_due(row)
                 
                 if amount_due > 0 or paid_amount > 0 or copay_amount > 0:
-                    # Format the date for display
-                    display_date = visit_date_str.split()[0] if visit_date_str else ''
+                    # Format the date for display as MM/DD/YYYY
+                    display_date = self._format_date_for_display(visit_date_raw)
                     
-                    # Get service description - UPDATED
+                    # Get service description
                     service_type = row.get('type_of_service', '').strip()
                     if not service_type:
                         service_type = "Mental Health Visit"  # Default for table display
                     
+                    # Add single row to table - FIXED
                     table_data.append([
                         display_date,
-                        service_type,  # Use the actual service type
+                        service_type,
                         f'$ {paid_amount:.2f}' if paid_amount > 0 else '$ -',
                         f'$ {copay_amount:.2f}' if copay_amount > 0 else '$ -'
                     ])
@@ -596,6 +640,11 @@ class PatientInvoiceGenerator:
             # Add subtotal row
             table_data.append(['', 'SUBTOTAL', f'$ {total_paid:.2f}', f'$ {total_copay:.2f}'])
             table_data.append(['', 'TOTAL', '', f'$ {total_due:.2f}'])
+            
+            # Debug: Print table structure to see what's being generated
+            self.logger.info(f"Table data structure: {len(table_data)} rows")
+            for i, row in enumerate(table_data):
+                self.logger.info(f"Row {i}: {row}")
             
             service_table = Table(table_data, colWidths=[1.5*inch, 2.5*inch, 1.2*inch, 1.3*inch])
             service_table.setStyle(TableStyle([
