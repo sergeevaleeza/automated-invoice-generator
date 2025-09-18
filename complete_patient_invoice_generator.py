@@ -1028,7 +1028,7 @@ def main():
     """Example usage"""
     generator = PatientInvoiceGenerator(
         amount_due_strategy="auto",
-        statement_date="2025-09-12"
+        statement_date=datetime.now().strftime("%Y-%m-%d")  # This will be today's date
     )
     
     try:
