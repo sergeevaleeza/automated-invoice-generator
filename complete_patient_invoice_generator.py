@@ -512,10 +512,10 @@ class PatientInvoiceGenerator:
             header_2_style = ParagraphStyle(
                 'Header',
                 parent=styles['Normal'],
-                fontSize=11,
+                fontSize=10,
                 alignment=TA_CENTER,
                 spaceAfter=3,
-                fontName='Helvetica'
+                fontName='Helvetica-Bold'
             )
             
             title_style = ParagraphStyle(
