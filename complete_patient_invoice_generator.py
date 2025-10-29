@@ -508,6 +508,15 @@ class PatientInvoiceGenerator:
                 spaceAfter=3,
                 fontName='Helvetica-Bold'
             )
+
+            header_2_style = ParagraphStyle(
+                'Header',
+                parent=styles['Normal'],
+                fontSize=11,
+                alignment=TA_CENTER,
+                spaceAfter=3,
+                fontName='Helvetica'
+            )
             
             title_style = ParagraphStyle(
                 'Title',
@@ -524,9 +533,9 @@ class PatientInvoiceGenerator:
             story.append(Paragraph("BOARD CERTIFIED PSYCHIATRIST", header_style))
             story.append(Spacer(1, 8))
             
-            story.append(Paragraph("OFFICE ADDRESS: 25 EDWARDS COURT, SUITE 101, BURLINGAME, CA 94010", header_style))
-            story.append(Paragraph("MAILING ADDRESS: PO BOX 351, BURLINGAME, CA 94011", header_style))
-            story.append(Paragraph("EMAIL: ACCESS.MSMC@GMAIL.COM", header_style))
+            story.append(Paragraph("OFFICE ADDRESS: 25 EDWARDS COURT, SUITE 101, BURLINGAME, CA 94010", header_2_style))
+            story.append(Paragraph("MAILING ADDRESS: PO BOX 351, BURLINGAME, CA 94011", header_2_style))
+            story.append(Paragraph("EMAIL: ACCESS.MSMC@GMAIL.COM", header_2_style))
             story.append(Spacer(1, 20))
             
             # Patient information and payment instructions side by side
