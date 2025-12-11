@@ -809,7 +809,7 @@ class PatientInvoiceGenerator:
             raise
         
     # Create custom footer function for this specific document
-    def add_optimized_footer(canvas, doc):
+    def add_optimized_footer(self, canvas, doc):
         """Add footer to each page with dynamic font size"""
         canvas.saveState()
         footer_text = "If you have questions regarding your bill, please contact us at (415)857-1151."
