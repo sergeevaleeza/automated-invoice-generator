@@ -1,4 +1,4 @@
-# 🏥 Medical Invoice Generator
+# 🏥 **[Medical Invoice Generator](https://automated-invoice-generator.streamlit.app/)**
 
 Generate per‑patient **PDF invoices**, **DOCX cover letters**, optional **CSV line items**, and a **summary report** from a patient roster and a billing spreadsheet. Includes fuzzy patient matching, previous‑balance handling, and flexible column mapping — all via a Streamlit UI.
 
