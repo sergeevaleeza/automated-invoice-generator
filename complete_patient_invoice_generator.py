@@ -559,6 +559,9 @@ class PatientInvoiceGenerator:
                 spacer_sections = 8
                 spacer_small = 8
                 footer_font = 8
+
+            # Make footer font size available to footer callback
+            self.footer_font = footer_font
         
             # Create document with optimized margins
             doc = SimpleDocTemplate(str(output_path), pagesize=letter,
@@ -800,26 +803,35 @@ class PatientInvoiceGenerator:
             story.append(Paragraph("Provider Signature - Michael Levinson, MD", signature_style))
             
             # Build the document
-            doc.build(story, onFirstPage=self.add_optimized_footer, onLaterPages=self.add_optimized_footer)
+            #doc.build(story, onFirstPage=self.add_optimized_footer, onLaterPages=self.add_optimized_footer)
             # doc.build(story, onFirstPage=self._add_footer, onLaterPages=self._add_footer)
-            self.logger.info(f"Generated PDF invoice: {output_path}")
+            #self.logger.info(f"Generated PDF invoice: {output_path}")
+            
+        #except Exception as e:
+        #    self.logger.error(f"Error generating PDF invoice: {e}")
+        #    raise
+        
+        # Create custom footer function for this specific document
+        def add_optimized_footer(self, canvas, doc):
+            """Add footer to each page with dynamic font size"""
+            canvas.saveState()
+            footer_text = "If you have questions regarding your bill, please contact us at (415)857-1151."
+            canvas.setFont('Helvetica', footer_font)
+        
+            # Center the text
+            text_width = canvas.stringWidth(footer_text, 'Helvetica', footer_font)
+            x_position = (letter[0] - text_width) / 2
+            canvas.drawString(x_position, 0.5*inch, footer_text)
+            canvas.restoreState()
+
+        # Build the document
+        doc.build(story, onFirstPage=self.add_optimized_footer, onLaterPages=self.add_optimized_footer)
+        # doc.build(story, onFirstPage=self._add_footer, onLaterPages=self._add_footer)
+        self.logger.info(f"Generated PDF invoice: {output_path}")
             
         except Exception as e:
             self.logger.error(f"Error generating PDF invoice: {e}")
             raise
-        
-    # Create custom footer function for this specific document
-    def add_optimized_footer(self, canvas, doc):
-        """Add footer to each page with dynamic font size"""
-        canvas.saveState()
-        footer_text = "If you have questions regarding your bill, please contact us at (415)857-1151."
-        canvas.setFont('Helvetica', footer_font)
-    
-        # Center the text
-        text_width = canvas.stringWidth(footer_text, 'Helvetica', footer_font)
-        x_position = (letter[0] - text_width) / 2
-        canvas.drawString(x_position, 0.5*inch, footer_text)
-        canvas.restoreState()
     
     def _generate_cover_letter(self, patient: PatientData, template_file: str, output_path: Path):
         """Generate cover letter DOCX from template"""
