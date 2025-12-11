@@ -560,10 +560,10 @@ class PatientInvoiceGenerator:
                 spacer_small = 8
                 footer_font = 8
         
-        # Create document with optimized margins
-        doc = SimpleDocTemplate(str(output_path), pagesize=letter,
-                            topMargin=top_margin*inch, bottomMargin=bottom_margin*inch,
-                            leftMargin=0.75*inch, rightMargin=0.75*inch)
+            # Create document with optimized margins
+            doc = SimpleDocTemplate(str(output_path), pagesize=letter,
+                                topMargin=top_margin*inch, bottomMargin=bottom_margin*inch,
+                                leftMargin=0.75*inch, rightMargin=0.75*inch)
             
             story = []
             styles = getSampleStyleSheet()
