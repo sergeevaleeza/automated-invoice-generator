@@ -492,8 +492,80 @@ class PatientInvoiceGenerator:
                             total_due: float, patient_df: pd.DataFrame, output_path: Path):
         """Generate PDF invoice"""
         try:
+            # Count items to determine layout optimization level
+            num_items = len(patient_df[
+                (patient_df.get('paid', 0) != 0) | 
+                (patient_df.get('copay', 0) != 0)
+            ])
+            
+            # Check for previous balance
+            has_previous_balance = any(line.is_previous_balance for line in lines)
+            total_rows = num_items + (1 if has_previous_balance else 0) + 3  # +3 for header, subtotal, total
+            
+            # Determine optimization level
+            if total_rows <= 18:
+                # Standard layout - no changes needed
+                font_header = 12
+                font_header2 = 10
+                font_title = 13
+                font_body = 10
+                font_table = 9
+                row_height = None  # Default
+                top_margin = 0.5
+                bottom_margin = 0.75
+                spacer_header = 8
+                spacer_sections = 20
+                spacer_small = 20
+                footer_font = 12
+            elif total_rows <= 25:
+                # Slight compression
+                font_header = 11
+                font_header2 = 9
+                font_title = 12
+                font_body = 9
+                font_table = 8
+                row_height = 14
+                top_margin = 0.4
+                bottom_margin = 0.6
+                spacer_header = 6
+                spacer_sections = 15
+                spacer_small = 15
+                footer_font = 10
+            elif total_rows <= 35:
+                # Moderate compression
+                font_header = 10
+                font_header2 = 8
+                font_title = 11
+                font_body = 8
+                font_table = 7
+                row_height = 12
+                top_margin = 0.35
+                bottom_margin = 0.5
+                spacer_header = 4
+                spacer_sections = 10
+                spacer_small = 10
+                footer_font = 9
+            else:
+                # Maximum compression
+                font_header = 9
+                font_header2 = 7
+                font_title = 10
+                font_body = 7
+                font_table = 6
+                row_height = 10
+                top_margin = 0.3
+                bottom_margin = 0.4
+                spacer_header = 3
+                spacer_sections = 8
+                spacer_small = 8
+                footer_font = 8
+
+            # Make footer font size available to footer callback
+            self.footer_font = footer_font
+        
+            # Create document with optimized margins
             doc = SimpleDocTemplate(str(output_path), pagesize=letter,
-                                topMargin=0.5*inch, bottomMargin=0.75*inch,
+                                topMargin=top_margin*inch, bottomMargin=bottom_margin*inch,
                                 leftMargin=0.75*inch, rightMargin=0.75*inch)
             
             story = []
@@ -503,27 +575,27 @@ class PatientInvoiceGenerator:
             header_style = ParagraphStyle(
                 'Header',
                 parent=styles['Normal'],
-                fontSize=12,
+                fontSize=font_header,  # Changed to dynamic
                 alignment=TA_CENTER,
                 spaceAfter=3,
                 fontName='Helvetica-Bold'
             )
 
             header_2_style = ParagraphStyle(
-                'Header',
+                'Header2',  # Fixed duplicate name
                 parent=styles['Normal'],
-                fontSize=10,
+                fontSize=font_header2,  # Changed to dynamic
                 alignment=TA_CENTER,
-                spaceAfter=3,
+                spaceAfter=2,
                 fontName='Helvetica-Bold'
             )
             
             title_style = ParagraphStyle(
                 'Title',
                 parent=styles['Normal'],
-                fontSize=13,
+                fontSize=font_title,  # Changed to dynamic
                 alignment=TA_CENTER,
-                spaceAfter=20,
+                spaceAfter=spacer_sections,  # Changed to dynamic
                 fontName='Helvetica-Bold'
             )
             
@@ -531,12 +603,12 @@ class PatientInvoiceGenerator:
             story.append(Paragraph("ACCESS MULTI-SPECIALTY MEDICAL CLINIC, INC.", header_style))
             story.append(Paragraph("MICHAEL U. LEVINSON, MD, PH D.", header_style))
             story.append(Paragraph("BOARD CERTIFIED PSYCHIATRIST", header_style))
-            story.append(Spacer(1, 8))
+            story.append(Spacer(1, spacer_header))  # Instead of 8
             
             story.append(Paragraph("OFFICE ADDRESS: 25 EDWARDS COURT, SUITE 101, BURLINGAME, CA 94010", header_2_style))
             story.append(Paragraph("MAILING ADDRESS: PO BOX 351, BURLINGAME, CA 94011", header_2_style))
             story.append(Paragraph("EMAIL: ACCESS.MSMC@GMAIL.COM", header_2_style))
-            story.append(Spacer(1, 20))
+            story.append(Spacer(1, spacer_sections))  # Instead of 20
             
             # Patient information and payment instructions side by side
             display_postal = patient.postal_code
@@ -566,7 +638,7 @@ class PatientInvoiceGenerator:
             combined_table.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
                 ('FONTNAME', (1, 0), (1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 10),
+                ('FONTSIZE', (0, 0), (-1, -1), font_body),  # Dynamic
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                 ('LEFTPADDING', (0, 0), (-1, -1), 0),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 0),
@@ -587,7 +659,7 @@ class PatientInvoiceGenerator:
             statement_table = Table(statement_info, colWidths=[2*inch, 2*inch])
             statement_table.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 10),
+                ('FONTSIZE', (0, 0), (-1, -1), font_body),  # Dynamic
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ]))
@@ -655,22 +727,33 @@ class PatientInvoiceGenerator:
             for i, row in enumerate(table_data):
                 self.logger.info(f"Row {i}: {row}")
             
-            service_table = Table(table_data, colWidths=[1.5*inch, 2.5*inch, 1.2*inch, 1.3*inch])
+            # Create table with dynamic row heights
+            if row_height:
+                # Set specific row heights for all rows
+                row_heights = [row_height + 2] + [row_height] * (len(table_data) - 1)
+                service_table = Table(table_data, 
+                                    colWidths=[1.5*inch, 2.5*inch, 1.2*inch, 1.3*inch],
+                                    rowHeights=row_heights)
+            else:
+                # Use default row heights
+                service_table = Table(table_data, 
+                                    colWidths=[1.5*inch, 2.5*inch, 1.2*inch, 1.3*inch])
+            
             service_table.setStyle(TableStyle([
                 # Header row
                 ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 0), (-1, 0), font_body),  # Dynamic header
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ('ALIGN', (2, 0), (3, -1), 'RIGHT'),
                 
                 # Data rows
                 ('FONTNAME', (0, 1), (-1, -3), 'Helvetica'),
-                ('FONTSIZE', (0, 1), (-1, -3), 9),
+                ('FONTSIZE', (0, 1), (-1, -3), font_table),  # Dynamic data rows
                 
                 # Subtotal and total rows
                 ('FONTNAME', (0, -2), (-1, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, -2), (-1, -1), 10),
+                ('FONTSIZE', (0, -2), (-1, -1), font_body),  # Dynamic totals
                 ('LINEABOVE', (0, -2), (-1, -2), 1, colors.black),
                 ('LINEABOVE', (0, -1), (-1, -1), 2, colors.black),
                 
@@ -678,10 +761,14 @@ class PatientInvoiceGenerator:
                 ('GRID', (0, 0), (-1, -3), 0.5, colors.black),
                 ('BOX', (0, 0), (-1, -1), 1, colors.black),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+
+                # Reduce padding when compressed
+                ('TOPPADDING', (0, 1), (-1, -1), 1 if total_rows > 25 else 3),
+                ('BOTTOMPADDING', (0, 1), (-1, -1), 1 if total_rows > 25 else 3),
             ]))
             
             story.append(service_table)
-            story.append(Spacer(1, 20))
+            story.append(Spacer(1, spacer_small))  # After service table
             
             # Amount due section
             amount_section = [
@@ -692,7 +779,7 @@ class PatientInvoiceGenerator:
             amount_table = Table(amount_section, colWidths=[2*inch, 2*inch])
             amount_table.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 11),
+                ('FONTSIZE', (0, 0), (-1, -1), font_body + 1),  # Slightly larger than body
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ('BOX', (0, 0), (0, 1), 1, colors.black),
                 ('BOX', (1, 0), (1, 1), 1, colors.black),
@@ -700,40 +787,49 @@ class PatientInvoiceGenerator:
             ]))
             
             story.append(amount_table)
-            story.append(Spacer(1, 30))
+            story.append(Spacer(1, spacer_sections if total_rows <= 25 else spacer_small))  # After amount table
             
             # Provider signature
             signature_style = ParagraphStyle(
                 'Signature',
                 parent=styles['Normal'],
-                fontSize=11,
+                fontSize=font_body + 1,  # Dynamic
                 alignment=TA_RIGHT,
                 fontName='Helvetica-Bold'
             )
 
             story.append(Paragraph("_________________________________", signature_style))
-            story.append(Spacer(1, 12))
+            story.append(Spacer(1, 12 if total_rows <= 25 else 8))  # After signature line
             story.append(Paragraph("Provider Signature - Michael Levinson, MD", signature_style))
             
-            # Build the document
-            doc.build(story, onFirstPage=self._add_footer, onLaterPages=self._add_footer)
+            # Build the document and attach the footer method
+            doc.build(
+                story,
+                onFirstPage=self.add_optimized_footer,
+                onLaterPages=self.add_optimized_footer,
+            )
             self.logger.info(f"Generated PDF invoice: {output_path}")
-            
+
         except Exception as e:
             self.logger.error(f"Error generating PDF invoice: {e}")
             raise
-        
-    def _add_footer(self, canvas, doc):
-        """Add footer to each page"""
+
+    def add_optimized_footer(self, canvas, doc):
+        """Add footer to each page with dynamic font size"""
         canvas.saveState()
         footer_text = "If you have questions regarding your bill, please contact us at (415)857-1151."
-        canvas.setFont('Helvetica', 12)
     
-        # Center the text manually to avoid API compatibility issues
-        text_width = canvas.stringWidth(footer_text, 'Helvetica', 12)
+        # Fallback if, for some reason, footer_font wasn't set
+        font_size = getattr(self, "footer_font", 10)
+    
+        canvas.setFont("Helvetica", font_size)
+    
+        # Center the text
+        text_width = canvas.stringWidth(footer_text, "Helvetica", font_size)
         x_position = (letter[0] - text_width) / 2
-        canvas.drawString(x_position, 0.5*inch, footer_text)
+        canvas.drawString(x_position, 0.5 * inch, footer_text)
         canvas.restoreState()
+        
     
     def _generate_cover_letter(self, patient: PatientData, template_file: str, output_path: Path):
         """Generate cover letter DOCX from template"""
