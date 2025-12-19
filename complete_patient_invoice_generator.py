@@ -1153,12 +1153,18 @@ class PatientInvoiceGenerator:
                     # Generate invoice lines
                     lines, total_due, original_df = self._generate_invoice_lines(patient_df)
                     
-                    if total_due <= 0:
-                        reason = "No open balance"
+                    if total_due < 0:
+                        reason = "Credit balance (overpaid)"
                         self.logger.info(f"{reason} for {patient_name}, skipping")
                         summary.skipped_patients.append((patient_name, reason))
                         summary.total_skipped += 1
                         continue
+                    elif total_due == 0:
+                        # Log it but DON'T skip - let it generate the invoice
+                        self.logger.info(f"Zero balance for {patient_name}, generating invoice to show paid in full")
+                        # Optional: track these separately in summary
+                        summary.zero_balance_count = getattr(summary, 'zero_balance_count', 0) + 1
+                        # Continue processing (no continue statement here!)
                     
                     # Create patient folder and use matched patient data for naming
                     if patient:
