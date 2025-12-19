@@ -467,18 +467,19 @@ class PatientInvoiceGenerator:
         for _, row in patient_df.iterrows():
             amount_due = self._calculate_amount_due(row)
             
-            if amount_due > 0:  # Only include lines with amounts due
-                # Get service type from the new column, use default if empty
-                service_type = row.get('type_of_service', '').strip()
-                if not service_type:
-                    service_type = "Psychotherapy and/or Med Management"  # Default
-                
-                lines.append(InvoiceLine(
-                    service_date=str(row['visit_date']),
-                    description=service_type,  # Use the actual service type
-                    amount=amount_due,
-                    is_previous_balance=False
-                ))
+            # Get service type from the new column, use default if empty
+            service_type = row.get('type_of_service', '').strip()
+            if not service_type:
+                service_type = "Psychotherapy and/or Med Management"  # Default
+            
+            # Include the line even if amount_due is 0
+            # This way, paid visits still appear on the invoice
+            lines.append(InvoiceLine(
+                service_date=str(row['visit_date']),
+                description=service_type,
+                amount=amount_due,  # This can be 0 for paid visits
+                is_previous_balance=False
+            ))
         
         # Calculate total_due as subtotal_copay minus subtotal_paid
         subtotal_copay = float(patient_df['copay'].sum()) + previous_balance
