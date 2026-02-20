@@ -706,7 +706,7 @@ class PatientInvoiceGenerator:
                     # Get service description
                     service_type = row.get('type_of_service', '').strip()
                     if not service_type:
-                        service_type = "Mental Health Visit"  # Default for table display
+                        service_type = "Psychotherapy and/or Med Management"  # Default for table display
                     
                     # Add single row to table - FIXED
                     table_data.append([
