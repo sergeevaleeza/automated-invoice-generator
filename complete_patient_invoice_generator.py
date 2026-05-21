@@ -180,9 +180,9 @@ class PatientInvoiceGenerator:
             patients = {}
             
             # Try to identify columns dynamically
-            possible_prn_cols = ['Patient Record Number', 'PRN', 'ID', 'Patient ID']
-            possible_first_cols = ['First name', 'First Name', 'FirstName', 'Given Name']
-            possible_last_cols = ['Last name', 'Last Name', 'LastName', 'Surname', 'Family Name']
+            possible_prn_cols = ['Patient Identifier', 'Patient Record Number', 'PRN', 'ID', 'Patient ID']
+            possible_first_cols = ['Patient First Name', 'First name', 'First Name', 'FirstName', 'Given Name']
+            possible_last_cols = ['Patient Last Name', 'Last name', 'Last Name', 'LastName', 'Surname', 'Family Name']
             possible_dob_cols = ['DOB', 'Date of Birth', 'Birth Date']
             possible_addr1_cols = ['Address Line 1', 'Address 1', 'Street Address', 'Address']
             possible_addr2_cols = ['Address Line 2', 'Address 2', 'Apt', 'Suite']
