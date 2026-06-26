@@ -658,7 +658,6 @@ class PatientInvoiceGenerator:
                 for _, row in patient_df.iterrows():
                     paid_amount = float(row.get('paid', 0))
                     copay_amount = float(row.get('copay', 0))
-                    copay_owed = max(0.0, copay_amount - paid_amount)
 
                     if paid_amount > 0 or copay_amount > 0:
                         display_date = self._format_date_for_display(row['visit_date'])
@@ -666,14 +665,15 @@ class PatientInvoiceGenerator:
                         if not service_type:
                             service_type = "Psychotherapy and/or Med Management"
 
+                        # Show raw copay per row; net amount due is reflected in the TOTAL row
                         table_data.append([
                             display_date,
                             service_type,
                             f'$ {paid_amount:.2f}' if paid_amount > 0 else '$ -',
-                            f'$ {copay_owed:.2f}' if copay_owed > 0 else '$ -'
+                            f'$ {copay_amount:.2f}' if copay_amount > 0 else '$ -'
                         ])
                         total_paid_display += paid_amount
-                        total_copay_display += copay_owed
+                        total_copay_display += copay_amount
 
                 table_data.append(['', 'SUBTOTAL', f'$ {total_paid_display:.2f}', f'$ {total_copay_display:.2f}'])
                 table_data.append(['', 'TOTAL', '', f'$ {total_due:.2f}'])
