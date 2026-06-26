@@ -178,11 +178,14 @@ class PatientInvoiceGenerator:
         return re.sub(r'[^A-Za-z0-9_]', '_', name)
 
     def _has_cpt_codes(self, patient_df: pd.DataFrame) -> bool:
-        """Check if any value in type_of_service column is a 5-digit CPT code"""
+        """Check if any value in type_of_service column contains a 5-digit CPT code.
+        Matches both bare codes ('90837') and codes embedded in descriptions
+        ('Med Management (CPT Code 99213)').
+        """
         if 'type_of_service' not in patient_df.columns:
             return False
         for value in patient_df['type_of_service']:
-            if re.match(r'^\d{5}$', str(value).strip()):
+            if re.search(r'\b\d{5}\b', str(value)):
                 return True
         return False
 

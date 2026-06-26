@@ -15,8 +15,12 @@
 - Added `WEBSITE: https://accessmultispecialty.com/` as a fourth line in the contact info block, below the existing EMAIL line.
 
 #### 4. Conditional EIN and NPI in header
-- Added `_has_cpt_codes()` method that checks whether any value in the `type_of_service` column matches the regex `r'^\d{5}$'` (exactly 5 digits).
+- Added `_has_cpt_codes()` method that checks whether any value in the `type_of_service` column contains a 5-digit CPT code.
 - When CPT codes are detected, a fourth line `EIN: 94-3368586    NPI: 1245365782` is appended to the three-line clinic header. When no CPT codes are present the header is unchanged.
+
+#### 4a. Bugfix — CPT detection missed codes embedded in descriptions
+- The initial regex `r'^\d{5}$'` required the entire cell value to be exactly 5 digits, so descriptions like `"Med Management (CPT Code 99213)"` were not detected and the EIN/NPI line was never added.
+- Changed to `re.search(r'\b\d{5}\b', ...)`, which finds a 5-digit number anywhere in the string while `\b` word boundaries still prevent false matches from 4- or 6-digit numbers.
 
 #### 5. Two-line footer
 - `add_optimized_footer()` now draws two centered lines at the bottom of every page, both in Helvetica 8pt:
@@ -55,7 +59,7 @@
 - TOTAL row shows `total_due` as computed by `_generate_invoice_lines()`.
 
 ### Added
-- `_has_cpt_codes(patient_df)` — detects 5-digit CPT codes in `type_of_service` column.
+- `_has_cpt_codes(patient_df)` — detects 5-digit CPT codes in `type_of_service` column using `re.search(r'\b\d{5}\b', ...)`, matching both bare codes (`90837`) and codes embedded in descriptions (`Med Management (CPT Code 99213)`).
 - `_count_pdf_pages(pdf_bytes)` — counts pages in a ReportLab-generated PDF from raw bytes.
 - `_LAYOUT_TIERS` class attribute — six progressive layout configurations used for single-page fitting.
 - `InvoiceLine.is_credit` field — distinguishes overpayment credits from standard previous-balance charges.
