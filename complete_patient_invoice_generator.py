@@ -28,7 +28,10 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from docx import Document
 
 # Shared data structures + formatting helpers (also used by excel_invoice_generator.py)
-from invoice_models import PatientData, InvoiceLine, ProcessingSummary, format_date_for_display
+from invoice_models import (
+    PatientData, InvoiceLine, ProcessingSummary, format_date_for_display,
+    REQUIRED_TEMPLATE_PLACEHOLDERS,
+)
 
 # Excel invoice generation (mirrors the PDF layout, no shared business logic)
 from excel_invoice_generator import generate_excel_invoice
@@ -743,18 +746,22 @@ class PatientInvoiceGenerator:
             if display_postal and '.' in display_postal:
                 display_postal = display_postal.split('.')[0]
 
-            # Replacement mappings - handle empty values gracefully
-            replacements = {
-                '[First Name]': patient.first_name or '',
-                '[Last Name]': patient.last_name or '',
-                '[Full Name]': f"{patient.first_name} {patient.last_name}".strip(),
-                '[Address Line 1]': patient.address_line1 or '',
-                '[Address Line 2]': patient.address_line2 or '',
-                '[City]': patient.city or '',
-                '[State]': patient.state or '',
-                '[Postal Code]': display_postal or '',
-                '[Patient Record Number]': patient.prn or ''
-            }
+            # Replacement mappings - handle empty values gracefully.
+            # Keys come from the shared REQUIRED_TEMPLATE_PLACEHOLDERS list
+            # (invoice_models.py) so the generator and the template validator
+            # never drift apart.
+            placeholder_values = [
+                patient.first_name or '',
+                patient.last_name or '',
+                f"{patient.first_name} {patient.last_name}".strip(),
+                patient.address_line1 or '',
+                patient.address_line2 or '',
+                patient.city or '',
+                patient.state or '',
+                display_postal or '',
+                patient.prn or '',
+            ]
+            replacements = dict(zip(REQUIRED_TEMPLATE_PLACEHOLDERS, placeholder_values))
 
             def replace_text_in_paragraph(paragraph, old_text, new_text):
                 """Replace text while preserving formatting"""

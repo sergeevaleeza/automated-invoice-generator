@@ -18,6 +18,26 @@
 #### 3. Shared invoice data structures extracted to `invoice_models.py`
 - Moved `PatientData`, `InvoiceLine`, `ProcessingSummary`, and the date-formatting helper (`_format_date_for_display`, now a module-level `format_date_for_display()`) out of `complete_patient_invoice_generator.py` into a new `invoice_models.py`, so both the PDF and Excel generators import the same definitions instead of duplicating them. `PatientInvoiceGenerator._format_date_for_display()` is now a thin wrapper around the shared function; behavior is unchanged.
 
+#### 4. Bundled default cover letter template, with optional override
+- Added `templates/Access_Multi_Letter_Cover.docx`, loaded automatically on app start instead of requiring a re-upload every session. (Bundled here as a clearly-labeled placeholder with the correct merge placeholders — replace with the real letter content, or use "Save as new default" below.)
+- The uploader in the "Upload Files" tab is now optional, moved into a "Replace cover letter template (optional)" expander. An uploaded file overrides the bundled default for the session; the active template (bundled vs. uploaded) is shown via `st.info`. If the bundled default is missing, the app shows a warning and asks for an upload instead of crashing.
+- Added a "Save as new default template" button (behind a confirmation checkbox) that overwrites `templates/Access_Multi_Letter_Cover.docx` with the uploaded file. UI text notes this won't survive a Streamlit Cloud redeploy and the file should also be committed to the repo.
+- Added `TEMPLATE_CONFIG` (top-level dict in `invoice_app.py`) holding the default template path and required placeholder list.
+
+#### 5. Cover letter template validation
+- Added `REQUIRED_TEMPLATE_PLACEHOLDERS` (the 9 merge placeholders `_generate_cover_letter()` fills in) and `validate_cover_letter_template()` to `invoice_models.py` — opens a `.docx` (path or uploaded file object) with `python-docx` and reports which required placeholders are missing, scanning both paragraphs and table cells. Used to validate both the bundled default and any uploaded override; missing placeholders show as a warning without blocking generation.
+- `_generate_cover_letter()`'s `replacements` dict is now built from `REQUIRED_TEMPLATE_PLACEHOLDERS` (`dict(zip(...))`) instead of a separately hand-typed literal, so the generator and the validator can't drift apart.
+
+### Fixed
+
+#### 6. Excel invoice — payment notice text was cut off
+- The payment-instructions box (merged cell, columns C:D) sized its row span from the raw count of text items (4), not from how many visual lines Excel would actually wrap them into. Because the column width is narrower than several of the instruction lines (e.g. the 53-character Zelle line), Excel wrapped them into 2 lines each — needing ~8 rows of height, not 4 — and the last 1-2 lines were clipped. Excel does not auto-grow a merged cell's row height for wrapped text, so this required an explicit fix rather than just "turning on autofit".
+- Added `_count_wrapped_lines()` / `_estimate_chars_per_line()` to `excel_invoice_generator.py`, which estimate the wrapped line count from text length, column width, and font size, and size the merged block's row span from that estimate instead of the raw item count.
+
+#### 7. Excel invoice — bottom boxes rendered without a right border in some viewers
+- The "YOUR PORTION DUE" and "AMOUNT ENCLOSED" boxes only had their border set on the top-left cell of each merged range. openpyxl 3.1.5 happens to auto-propagate that border to the rest of the merge at save time, but this is an implicit, version-dependent behavior other spreadsheet applications (LibreOffice, Google Sheets) aren't guaranteed to replicate the same way.
+- Added a reusable `apply_box_border(ws, min_row, min_col, max_row, max_col)` helper that explicitly sets only the true perimeter edge on every boundary cell in a range (no relying on merge-copy behavior, no stray internal divider line). Used it for the payment-notice box (which also gained a border it didn't have before, per the reported "bordered cell block" description), both bottom amount boxes (now a single unified box per label+value pair instead of two independently-bordered rows), and defensively on the line-item table's outer perimeter.
+
 ## [Unreleased] — 2026-06-26
 
 ### Changed

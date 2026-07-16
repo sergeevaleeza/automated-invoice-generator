@@ -6,10 +6,20 @@ Used by both the PDF (complete_patient_invoice_generator.py) and Excel
 """
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Tuple, Optional
+from pathlib import Path
+from typing import List, Tuple, Optional, Union, BinaryIO
 import logging
 
 import pandas as pd
+
+# Placeholders the cover-letter DOCX template must contain, in the same
+# order _generate_cover_letter() fills them in. Single source of truth for
+# both the replacement logic and template validation.
+REQUIRED_TEMPLATE_PLACEHOLDERS = [
+    '[First Name]', '[Last Name]', '[Full Name]',
+    '[Address Line 1]', '[Address Line 2]', '[City]', '[State]',
+    '[Postal Code]', '[Patient Record Number]',
+]
 
 
 @dataclass
@@ -86,3 +96,23 @@ def format_date_for_display(date_value, logger: Optional[logging.Logger] = None)
         if logger:
             logger.warning(f"Could not format date '{date_value}': {e}")
         return str(date_value) if date_value else ''
+
+
+def validate_cover_letter_template(template: Union[str, Path, BinaryIO]) -> List[str]:
+    """Open a cover letter .docx (path or file-like object) and report which
+    of REQUIRED_TEMPLATE_PLACEHOLDERS are missing from its text. Returns an
+    empty list if the template is valid. Raises if the file isn't a readable
+    .docx at all.
+    """
+    from docx import Document  # local import: keeps python-docx optional for callers that only need models
+
+    doc = Document(template)
+
+    text_chunks = [p.text for p in doc.paragraphs]
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                text_chunks.extend(p.text for p in cell.paragraphs)
+
+    full_text = "\n".join(text_chunks)
+    return [placeholder for placeholder in REQUIRED_TEMPLATE_PLACEHOLDERS if placeholder not in full_text]

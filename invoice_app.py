@@ -10,6 +10,13 @@ import os
 
 # Import your existing class
 from complete_patient_invoice_generator import PatientInvoiceGenerator
+from invoice_models import REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template
+
+# --- Config: cover letter template path + required placeholders ---
+TEMPLATE_CONFIG = {
+    "default_template_path": Path(__file__).parent / "templates" / "Access_Multi_Letter_Cover.docx",
+    "required_placeholders": REQUIRED_TEMPLATE_PLACEHOLDERS,
+}
 
 st.set_page_config(
     page_title="Medical Invoice Generator",
@@ -46,11 +53,69 @@ with tab1:
         
     with col3:
         st.subheader("Cover Letter Template")
-        template_file = st.file_uploader(
-            "Upload Cover Letter Template",
-            type=['docx'],
-            help="Word document template for cover letters"
-        )
+
+        default_template_path = TEMPLATE_CONFIG["default_template_path"]
+        default_template_exists = default_template_path.exists()
+
+        with st.expander("Replace cover letter template (optional)"):
+            template_upload = st.file_uploader(
+                "Upload a .docx to use instead of the bundled default",
+                type=['docx'],
+                help="Overrides the bundled template for this session only, unless saved as the new default below."
+            )
+
+            if template_upload is not None:
+                template_upload.seek(0)
+                try:
+                    missing = validate_cover_letter_template(template_upload)
+                    if missing:
+                        st.warning(f"Uploaded template is missing placeholders: {', '.join(missing)}")
+                    else:
+                        st.success("Uploaded template validated — all required placeholders found.")
+                except Exception as e:
+                    st.error(f"Could not read uploaded template: {e}")
+                finally:
+                    template_upload.seek(0)
+
+                st.caption(
+                    "⚠️ Saving overwrites the bundled default template file. On Streamlit Cloud this "
+                    "change will NOT survive a redeploy — also commit the updated file to the repo "
+                    "to make it permanent."
+                )
+                confirm_save = st.checkbox("I understand this overwrites the bundled default template")
+                if st.button("💾 Save as new default template", disabled=not confirm_save):
+                    default_template_path.parent.mkdir(parents=True, exist_ok=True)
+                    template_upload.seek(0)
+                    default_template_path.write_bytes(template_upload.read())
+                    template_upload.seek(0)
+                    st.success(f"Saved as new default: {default_template_path.name}")
+                    st.rerun()
+
+        # Resolve which template is active for this run: uploaded override wins
+        if template_upload is not None:
+            active_template_label = f"Uploaded override: {template_upload.name}"
+            active_template_source = template_upload
+        elif default_template_exists:
+            active_template_label = f"Bundled default: {default_template_path.name}"
+            active_template_source = default_template_path
+        else:
+            active_template_label = None
+            active_template_source = None
+
+        if active_template_source is None:
+            st.warning("No cover letter template available. Upload one above to continue.")
+        else:
+            st.info(f"Active template: {active_template_label}")
+            try:
+                if hasattr(active_template_source, 'seek'):
+                    active_template_source.seek(0)
+                missing = validate_cover_letter_template(active_template_source)
+                if hasattr(active_template_source, 'seek'):
+                    active_template_source.seek(0)
+                if missing:
+                    st.warning(f"Active template is missing placeholders: {', '.join(missing)}")
+            except Exception as e:
+                st.error(f"Could not validate active template: {e}")
 
 with tab2:
     st.header("Invoice Settings")
@@ -89,9 +154,9 @@ with tab2:
 with tab3:
     st.header("Generate Reports")
     
-    # Check if all required files are uploaded
-    files_ready = all([roster_file, invoice_file, template_file])
-    
+    # Check if all required files are uploaded / available
+    files_ready = all([roster_file, invoice_file]) and active_template_source is not None
+
     if not files_ready:
         st.warning("Please upload all required files in the 'Upload Files' tab before generating reports.")
         st.stop()
@@ -129,8 +194,16 @@ with tab3:
                         f.write(roster_file.getbuffer())
                     with open(invoice_path, "wb") as f:
                         f.write(invoice_file.getbuffer())
-                    with open(template_path, "wb") as f:
-                        f.write(template_file.getbuffer())
+
+                    if hasattr(active_template_source, 'getbuffer'):
+                        # Uploaded file object (session override)
+                        active_template_source.seek(0)
+                        with open(template_path, "wb") as f:
+                            f.write(active_template_source.getbuffer())
+                        active_template_source.seek(0)
+                    else:
+                        # Path to the bundled default template
+                        shutil.copy(active_template_source, template_path)
                     
                     # Create custom mapping if provided
                     custom_mapping = {}
@@ -222,7 +295,7 @@ with st.sidebar:
     ### Step 1: Upload Files
     - **Patient Roster**: CSV with patient information
     - **Invoice Data**: Excel file with billing data
-    - **Cover Letter Template**: Word document template
+    - **Cover Letter Template**: uses the bundled default automatically — upload a `.docx` in "Replace cover letter template (optional)" only if you want to override it for this session (or save it as the new default)
     
     ### Step 2: Configure Settings
     - Set the statement date

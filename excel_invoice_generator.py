@@ -7,6 +7,7 @@ exact same inputs (PatientData, InvoiceLine list, total_due, the per-patient
 DataFrame, statement/payment-due dates, and the has_cpt flag) so no billing
 business logic is duplicated here — this module is presentation only.
 """
+import math
 from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple
@@ -77,6 +78,53 @@ def _clean_postal_code(postal_code: str) -> str:
     if postal_code and '.' in postal_code:
         return postal_code.split('.')[0]
     return postal_code
+
+
+def _estimate_chars_per_line(col_width_units: float, font_size: int) -> int:
+    """Estimate how many characters fit on one wrapped line inside a merged
+    range of the given total column width (Excel width units) and font size.
+    An Excel width unit is roughly one character of the workbook's default
+    ~11pt font; scale for the actual font size and subtract a small margin
+    for cell padding."""
+    base_chars = max(col_width_units - 2, 1)
+    scale = 11.0 / max(font_size, 6)
+    return max(int(base_chars * scale), 8)
+
+
+def _count_wrapped_lines(text_lines: List[str], col_width_units: float, font_size: int) -> int:
+    """Estimate the total visual (wrapped) line count for a list of logical
+    text lines once Excel wraps them inside a merged cell of the given width.
+    Excel does not auto-grow merged-cell row heights for wrapped text, so
+    row spans must be sized from this estimate rather than the raw line
+    count, or trailing lines get visually clipped."""
+    chars_per_line = _estimate_chars_per_line(col_width_units, font_size)
+    total = 0
+    for line in text_lines:
+        if not line:
+            total += 1
+            continue
+        total += max(1, math.ceil(len(line) / chars_per_line))
+    return total
+
+
+def apply_box_border(ws: Worksheet, min_row: int, min_col: int, max_row: int, max_col: int,
+                      style: str = "thin") -> None:
+    """Draw a single outline box around a cell range (merged or not),
+    setting only the true perimeter edge on each boundary cell — no internal
+    divider lines. Applied explicitly to every cell in the range rather than
+    relying on openpyxl's implicit top-left-cell border propagation for
+    merges, which other spreadsheet applications may not honor."""
+    side = Side(style=style, color="000000")
+    for r in range(min_row, max_row + 1):
+        for c in range(min_col, max_col + 1):
+            cell = ws.cell(row=r, column=c)
+            existing = cell.border
+            cell.border = Border(
+                left=side if c == min_col else existing.left,
+                right=side if c == max_col else existing.right,
+                top=side if r == min_row else existing.top,
+                bottom=side if r == max_row else existing.bottom,
+            )
 
 
 def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataFrame,
@@ -150,12 +198,18 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     patient_text = "\n".join(patient_lines)
     payment_text = "\n".join(cfg["payment_instructions"])
 
+    patient_col_width = cfg["col_widths"][0] + cfg["col_widths"][1]
+    payment_col_width = cfg["col_widths"][2] + cfg["col_widths"][3]
+    wrapped_patient_lines = _count_wrapped_lines(patient_lines, patient_col_width, tier["font_body"])
+    wrapped_payment_lines = _count_wrapped_lines(cfg["payment_instructions"], payment_col_width, tier["font_body"])
+
     info_row_start = row
-    n_info_lines = max(len(patient_lines), len(cfg["payment_instructions"]))
+    n_info_lines = max(wrapped_patient_lines, wrapped_payment_lines)
     info_row_end = info_row_start + n_info_lines - 1
 
     p_cell = merged(info_row_start, 1, info_row_end, 2, patient_text, body_bold_font, left)
     pay_cell = merged(info_row_start, 3, info_row_end, 4, payment_text, body_bold_font, left)
+    apply_box_border(ws, info_row_start, 3, info_row_end, 4)
     for r in range(info_row_start, info_row_end + 1):
         set_row_height(r, tier["row_h"])
     row = info_row_end + 1
@@ -238,25 +292,27 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
 
     add_item_row("", "SUBTOTAL", total_paid_display, total_copay_display, bold=True, top_border_style="medium")
     add_item_row("", "TOTAL", None, total_due, bold=True, top_border_style="double")
+    total_row_idx = row - 1
+    apply_box_border(ws, header_row_idx, 1, total_row_idx, 4)
 
     set_row_height(row, tier["spacer_h"] * 2)
     row += 1
 
     # --- Amount due section ---
     label_align = Alignment(horizontal="left", vertical="center")
+    amount_box_row_start = row
     l1 = merged(row, 1, row, 2, cfg["amount_due_label"], body_bold_font, label_align)
     l2 = merged(row, 3, row, 4, cfg["amount_enclosed_label"], body_bold_font, label_align)
-    l1.border = CELL_BORDER
-    l2.border = CELL_BORDER
     set_row_height(row, tier["row_h"] + 2)
     row += 1
     v1 = merged(row, 1, row, 2, total_due, body_bold_font, label_align)
     v1.number_format = CURRENCY_FMT
     v2 = merged(row, 3, row, 4, "", body_bold_font, label_align)
-    v1.border = CELL_BORDER
-    v2.border = CELL_BORDER
     set_row_height(row, tier["row_h"] + 2)
+    amount_box_row_end = row
     row += 1
+    apply_box_border(ws, amount_box_row_start, 1, amount_box_row_end, 2)
+    apply_box_border(ws, amount_box_row_start, 3, amount_box_row_end, 4)
     set_row_height(row, tier["spacer_h"] * 3)
     row += 1
 
