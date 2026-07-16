@@ -97,7 +97,21 @@ with tab3:
         st.stop()
     
     st.success("All required files uploaded successfully!")
-    
+
+    st.subheader("Invoice Export Format")
+    export_format_label = st.radio(
+        "Choose which invoice file format(s) to generate",
+        options=["PDF only", "Excel only", "Both PDF & Excel"],
+        index=0,
+        horizontal=True,
+        help="Excel invoices are print-ready (US Letter, one page) and mirror the PDF layout."
+    )
+    export_format = {
+        "PDF only": "pdf",
+        "Excel only": "excel",
+        "Both PDF & Excel": "both",
+    }[export_format_label]
+
     if st.button("🚀 Generate All Reports", type="primary", use_container_width=True):
         try:
             with st.spinner("Processing invoices... This may take a few minutes."):
@@ -140,7 +154,8 @@ with tab3:
                         template_file=str(template_path),
                         output_dir=str(output_dir),
                         custom_mapping=custom_mapping if custom_mapping else None,
-                        generate_csv=generate_csv
+                        generate_csv=generate_csv,
+                        export_format=export_format
                     )
                     
                     # Display results
@@ -186,12 +201,12 @@ with tab3:
                                     zip_file.write(file_path, relative_path)
                         
                         zip_buffer.seek(0)
-                        
-                        # Provide download button
+
+                        format_suffix = {"pdf": "", "excel": "_excel", "both": "_pdf_excel"}[export_format]
                         st.download_button(
-                            label="📥 Download All Generated Files",
+                            label=f"📥 Download All Generated Files ({export_format_label})",
                             data=zip_buffer.getvalue(),
-                            file_name=f"invoices_{statement_date.strftime('%Y%m%d')}.zip",
+                            file_name=f"invoices{format_suffix}_{statement_date.strftime('%Y%m%d')}.zip",
                             mime="application/zip",
                             use_container_width=True
                         )
@@ -215,12 +230,13 @@ with st.sidebar:
     - Map custom columns if needed
     
     ### Step 3: Generate Reports
+    - Choose an invoice export format (PDF, Excel, or both)
     - Click "Generate All Reports"
     - Download the zip file with all invoices
-    
+
     ### Output Files
     Each patient gets:
-    - PDF Invoice
+    - PDF and/or Excel Invoice
     - Word Cover Letter
     - CSV Line Items (optional)
     """)

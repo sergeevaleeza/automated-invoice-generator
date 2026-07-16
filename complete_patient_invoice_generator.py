@@ -12,7 +12,6 @@ import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 import logging
-from dataclasses import dataclass
 import os
 from difflib import SequenceMatcher
 from io import BytesIO
@@ -28,39 +27,11 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 # DOCX handling
 from docx import Document
 
-@dataclass
-class PatientData:
-    """Patient information from roster"""
-    prn: str
-    first_name: str
-    last_name: str
-    dob: str
-    address_line1: str
-    address_line2: str
-    city: str
-    state: str
-    postal_code: str
+# Shared data structures + formatting helpers (also used by excel_invoice_generator.py)
+from invoice_models import PatientData, InvoiceLine, ProcessingSummary, format_date_for_display
 
-@dataclass
-class InvoiceLine:
-    """Individual service line from invoice"""
-    service_date: str
-    description: str
-    amount: float
-    is_previous_balance: bool = False
-    is_credit: bool = False  # True for negative previous balance (overpayment shown as credit)
-
-@dataclass
-class ProcessingSummary:
-    """Summary of processing results"""
-    processed_patients: List[str]
-    skipped_patients: List[Tuple[str, str]]  # (name, reason)
-    errors: List[Tuple[str, str]]  # (patient_name, error)
-    total_processed: int
-    total_skipped: int
-    total_errors: int
-    total_amount_due: float
-    processing_date: str
+# Excel invoice generation (mirrors the PDF layout, no shared business logic)
+from excel_invoice_generator import generate_excel_invoice
 
 class PatientInvoiceGenerator:
     """Main class for generating patient invoices and cover letters"""
@@ -297,40 +268,7 @@ class PatientInvoiceGenerator:
 
     def _format_date_for_display(self, date_value) -> str:
         """Format date value to MM/DD/YYYY format"""
-        if pd.isna(date_value) or date_value == '' or date_value is None:
-            return ''
-
-        try:
-            # Convert to string first
-            date_str = str(date_value)
-
-            # Try to parse as datetime if it's not already
-            if isinstance(date_value, str):
-                # Handle different possible input formats
-                for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d']:
-                    try:
-                        parsed_date = datetime.strptime(date_str.split()[0], fmt)  # Take only date part
-                        return parsed_date.strftime('%m/%d/%Y')
-                    except ValueError:
-                        continue
-            elif hasattr(date_value, 'strftime'):
-                # If it's already a datetime object
-                return date_value.strftime('%m/%d/%Y')
-
-            # If we can't parse it, try to extract date from string
-            date_part = date_str.split()[0] if ' ' in date_str else date_str
-
-            # Try pandas to_datetime as last resort
-            parsed_date = pd.to_datetime(date_part, errors='coerce')
-            if not pd.isna(parsed_date):
-                return parsed_date.strftime('%m/%d/%Y')
-
-            # If all else fails, return the original string
-            return date_part
-
-        except Exception as e:
-            self.logger.warning(f"Could not format date '{date_value}': {e}")
-            return str(date_value) if date_value else ''
+        return format_date_for_display(date_value, self.logger)
 
     def load_invoice_data(self, invoice_file: str, custom_mapping: Dict = None) -> pd.DataFrame:
         """Load invoice Excel file and normalize columns"""
@@ -1033,8 +971,14 @@ class PatientInvoiceGenerator:
     def generate_invoices(self, roster_file: str, invoice_file: str,
                           template_file: str, output_dir: str = "output",
                           custom_mapping: Dict = None, generate_csv: bool = True,
-                          envelope_format: str = "docx"):
-        """Main method to generate all invoices and cover letters"""
+                          envelope_format: str = "docx", export_format: str = "pdf"):
+        """Main method to generate all invoices and cover letters.
+
+        export_format: "pdf", "excel", or "both" — controls which invoice
+        file format(s) are written per patient.
+        """
+        generate_pdf_invoice = export_format in ("pdf", "both")
+        generate_excel_invoice_file = export_format in ("excel", "both")
         # Initialize summary tracking
         summary = ProcessingSummary(
             processed_patients=[],
@@ -1101,8 +1045,17 @@ class PatientInvoiceGenerator:
                     base_name = f"{self._sanitize_filename(file_patient.last_name)}_{year}"
 
                     # PDF invoice (keep date suffix)
-                    pdf_path = patient_dir / f"{base_name}_Invoice_{date_str}.pdf"
-                    self._generate_pdf_invoice(file_patient, lines, total_due, original_df, pdf_path)
+                    if generate_pdf_invoice:
+                        pdf_path = patient_dir / f"{base_name}_Invoice_{date_str}.pdf"
+                        self._generate_pdf_invoice(file_patient, lines, total_due, original_df, pdf_path)
+
+                    # Excel invoice — same base filename, .xlsx extension
+                    if generate_excel_invoice_file:
+                        has_cpt = self._has_cpt_codes(original_df)
+                        xlsx_path = patient_dir / f"{base_name}_Invoice_{date_str}.xlsx"
+                        generate_excel_invoice(file_patient, lines, total_due, original_df,
+                                               self.statement_date, self.payment_due_date,
+                                               has_cpt, xlsx_path)
 
                     # DOCX envelope only — no date suffix, overwrites previous copy
                     envelope_docx_path = patient_dir / f"{self._sanitize_filename(file_patient.last_name)}_Envelope.docx"
