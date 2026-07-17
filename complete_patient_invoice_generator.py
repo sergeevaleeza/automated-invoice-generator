@@ -33,6 +33,7 @@ from invoice_models import (
     PatientData, InvoiceLine, ProcessingSummary, ProcessedPatientRecord, format_date_for_display,
     REQUIRED_TEMPLATE_PLACEHOLDERS, ValidationIssue, ValidationReport, VALIDATION_CATEGORIES,
     extract_embedded_cpt_code, SuperbillServiceLine,
+    NOTICE_LEVEL_NORMAL, NOTICE_LEVEL_SECOND, NOTICE_LEVEL_FINAL, NOTICE_LEVEL_TITLES,
 )
 from clinic_config import load_clinic_config
 import run_history
@@ -78,6 +79,21 @@ class PatientInvoiceGenerator:
     # this constants value against the existing ambiguity threshold in
     # _match_patient (also 0.85) for a consistent "high confidence" bar.
     LOW_CONFIDENCE_THRESHOLD = 0.85
+
+    # Days after a 2nd Notice before suggest_notice_level() escalates to a
+    # Final Notice — matches the "contact us within 14 days" language in
+    # both notice letter templates.
+    NOTICE_ESCALATION_DAYS = 14
+
+    # Reminder letter templates for escalated notices, keyed by NOTICE_LEVEL_*
+    # (replaces the normal cover letter for these patients). Converted from
+    # the clinic's real Word mail-merge .doc originals (kept alongside, for
+    # reference) to single-record .docx files using this app's [Bracket]
+    # placeholder convention instead of Word MERGEFIELD codes.
+    NOTICE_TEMPLATE_FILES = {
+        NOTICE_LEVEL_SECOND: Path(__file__).parent / "templates" / "TEMPLATE_MAIL_MERGE_1st_level_YYYYMMDD.docx",
+        NOTICE_LEVEL_FINAL: Path(__file__).parent / "templates" / "TEMPLATE_MAIL_MERGE_2nd_level_YYYYMMDD.docx",
+    }
 
     def __init__(self, amount_due_strategy: str = "auto", statement_date: Optional[str] = None,
                  clinic_config: Optional[Dict] = None):
@@ -545,7 +561,8 @@ class PatientInvoiceGenerator:
         return list(self.clinic.get('default_icd10_codes', []))
 
     def _generate_pdf_invoice(self, patient: PatientData, lines: List[InvoiceLine],
-                              total_due: float, patient_df: pd.DataFrame, output_path: Path):
+                              total_due: float, patient_df: pd.DataFrame, output_path: Path,
+                              notice_level: int = NOTICE_LEVEL_NORMAL):
         """Generate PDF invoice, automatically fitting content to a single page."""
         try:
             has_cpt = self._has_cpt_codes(patient_df)
@@ -633,7 +650,7 @@ class PatientInvoiceGenerator:
                 story.append(Spacer(1, p['spacer_small']))
 
                 # --- Patient Statement title ---
-                story.append(Paragraph("PATIENT STATEMENT", title_style))
+                story.append(Paragraph(NOTICE_LEVEL_TITLES[notice_level], title_style))
 
                 # --- Statement dates ---
                 statement_info = [
@@ -846,32 +863,7 @@ class PatientInvoiceGenerator:
                 patient.prn or '',
             ]
             replacements = dict(zip(REQUIRED_TEMPLATE_PLACEHOLDERS, placeholder_values))
-
-            def replace_text_in_paragraph(paragraph, old_text, new_text):
-                """Replace text while preserving formatting"""
-                if old_text in paragraph.text:
-                    for run in paragraph.runs:
-                        if old_text in run.text:
-                            run.text = run.text.replace(old_text, new_text)
-
-                    full_text = paragraph.text
-                    if old_text in full_text:
-                        new_text_full = full_text.replace(old_text, new_text)
-                        paragraph.clear()
-                        paragraph.add_run(new_text_full)
-
-            # Replace in paragraphs
-            for paragraph in doc.paragraphs:
-                for placeholder, value in replacements.items():
-                    replace_text_in_paragraph(paragraph, placeholder, value)
-
-            # Replace in tables
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for paragraph in cell.paragraphs:
-                            for placeholder, value in replacements.items():
-                                replace_text_in_paragraph(paragraph, placeholder, value)
+            self._replace_placeholders_in_docx(doc, replacements)
 
             # Handle address formatting - clean up empty address line 2
             for paragraph in doc.paragraphs:
@@ -888,6 +880,68 @@ class PatientInvoiceGenerator:
 
         except Exception as e:
             self.logger.error(f"Error generating cover letter: {e}")
+            raise
+
+    @staticmethod
+    def _replace_placeholders_in_docx(doc, replacements: Dict[str, str]) -> None:
+        """Replace [Bracket] placeholders with values throughout a docx's
+        paragraphs and table cells, preserving run formatting where a
+        placeholder sits entirely within one run. Shared by
+        _generate_cover_letter() and _generate_notice_letter() so the
+        replacement logic isn't duplicated between them."""
+        def replace_text_in_paragraph(paragraph, old_text, new_text):
+            if old_text in paragraph.text:
+                for run in paragraph.runs:
+                    if old_text in run.text:
+                        run.text = run.text.replace(old_text, new_text)
+
+                full_text = paragraph.text
+                if old_text in full_text:
+                    new_text_full = full_text.replace(old_text, new_text)
+                    paragraph.clear()
+                    paragraph.add_run(new_text_full)
+
+        for paragraph in doc.paragraphs:
+            for placeholder, value in replacements.items():
+                replace_text_in_paragraph(paragraph, placeholder, value)
+
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        for placeholder, value in replacements.items():
+                            replace_text_in_paragraph(paragraph, placeholder, value)
+
+    def _generate_notice_letter(self, patient: PatientData, notice_level: int,
+                                 amount_due: float, output_path: Path):
+        """Generate the 2nd/Final Notice reminder letter DOCX — replaces the
+        normal cover letter for a patient the user chose to send a notice
+        to instead of skipping (see generate_invoices()'s
+        notice_patient_levels param). Uses NOTICE_TEMPLATE_FILES, which
+        already contain the clinic's real letter wording with [Full Name] /
+        [Date] / [Amount] placeholders (converted from the original Word
+        mail-merge .doc templates)."""
+        try:
+            if output_path.exists():
+                output_path.unlink()
+
+            template_file = self.NOTICE_TEMPLATE_FILES[notice_level]
+            doc = Document(str(template_file))
+
+            full_name = f"{patient.first_name} {patient.last_name}".strip()
+            date_str = f"{self.statement_date:%B} {self.statement_date.day}, {self.statement_date.year}"
+            replacements = {
+                '[Full Name]': full_name,
+                '[Date]': date_str,
+                '[Amount]': f"${amount_due:,.2f}",
+            }
+            self._replace_placeholders_in_docx(doc, replacements)
+
+            doc.save(str(output_path))
+            self.logger.info("Generated notice letter")  # path omitted: contains patient name
+
+        except Exception as e:
+            self.logger.error(f"Error generating notice letter: {e}")
             raise
 
     def _generate_envelope_pdf(self, patient: PatientData, template_file: str, output_path: Path):
@@ -1214,11 +1268,16 @@ class PatientInvoiceGenerator:
                 overlaps = run_history.find_overlapping_runs(key, service_start, service_end, db_path=db_path)
                 if overlaps:
                     most_recent = overlaps[0]
+                    suggested_level = run_history.suggest_notice_level(
+                        overlaps, self.statement_date.strftime('%Y-%m-%d'),
+                        escalate_after_days=self.NOTICE_ESCALATION_DAYS,
+                    )
                     issues.append(ValidationIssue(
                         category="duplicate_invoice", severity="warning",
                         patient_name=patient_name,
                         detail=f"Already invoiced for {most_recent.service_date_start} to "
                                f"{most_recent.service_date_end} on {most_recent.invoice_date}.",
+                        suggested_notice_level=suggested_level,
                     ))
 
         return ValidationReport(
@@ -1268,6 +1327,7 @@ class PatientInvoiceGenerator:
                           custom_mapping: Dict = None, generate_csv: bool = True,
                           envelope_format: str = "docx", export_format: str = "pdf",
                           skip_patient_names: Optional[Set[str]] = None,
+                          notice_patient_levels: Optional[Dict[str, int]] = None,
                           run_history_db_path: Optional[Path] = None,
                           validation_report: Optional[ValidationReport] = None):
         """Main method to generate all invoices and cover letters.
@@ -1277,6 +1337,14 @@ class PatientInvoiceGenerator:
         skip_patient_names: raw invoice-sheet names (matching the 'name'
         column's groupby keys) to skip entirely — e.g. patients the user
         chose not to regenerate after a duplicate-invoice warning.
+        notice_patient_levels: raw invoice-sheet names mapped to
+        NOTICE_LEVEL_SECOND/FINAL — patients the user chose to send an
+        escalated notice to (instead of skipping or a normal invoice)
+        after a duplicate-invoice warning. Changes the PDF/Excel statement
+        title and replaces the normal cover letter with the matching
+        reminder letter (see _generate_notice_letter()). A name in both
+        skip_patient_names and notice_patient_levels is skipped — skip
+        wins, since it's the more conservative choice.
         validation_report: the pre-flight ValidationReport for this same
         roster/invoice pair, if the caller already ran one — included in
         the batch summary (file + UI) for a single combined view. Purely
@@ -1285,6 +1353,7 @@ class PatientInvoiceGenerator:
         generate_pdf_invoice = export_format in ("pdf", "both")
         generate_excel_invoice_file = export_format in ("excel", "both")
         skip_patient_names = skip_patient_names or set()
+        notice_patient_levels = notice_patient_levels or {}
         db_path = run_history_db_path or run_history.DEFAULT_DB_PATH
         # Initialize summary tracking
         summary = ProcessingSummary(
@@ -1319,6 +1388,8 @@ class PatientInvoiceGenerator:
                         summary.skipped_patients.append((patient_name, reason))
                         summary.total_skipped += 1
                         continue
+
+                    notice_level = notice_patient_levels.get(patient_name, NOTICE_LEVEL_NORMAL)
 
                     # Match patient
                     patient, is_ambiguous, _match_score = self._match_patient(patient_name, patients)
@@ -1365,7 +1436,8 @@ class PatientInvoiceGenerator:
                     # PDF invoice (keep date suffix)
                     if generate_pdf_invoice:
                         pdf_path = patient_dir / f"{base_name}_Invoice_{date_str}.pdf"
-                        self._generate_pdf_invoice(file_patient, lines, total_due, original_df, pdf_path)
+                        self._generate_pdf_invoice(file_patient, lines, total_due, original_df, pdf_path,
+                                                    notice_level=notice_level)
 
                     # Excel invoice — same base filename, .xlsx extension
                     if generate_excel_invoice_file:
@@ -1373,11 +1445,16 @@ class PatientInvoiceGenerator:
                         xlsx_path = patient_dir / f"{base_name}_Invoice_{date_str}.xlsx"
                         generate_excel_invoice(file_patient, lines, total_due, original_df,
                                                self.statement_date, self.payment_due_date,
-                                               has_cpt, xlsx_path)
+                                               has_cpt, xlsx_path, notice_level=notice_level)
 
-                    # DOCX envelope only — no date suffix, overwrites previous copy
+                    # DOCX envelope only — no date suffix, overwrites previous copy.
+                    # A patient receiving an escalated notice gets the matching
+                    # reminder letter instead of the normal cover letter.
                     envelope_docx_path = patient_dir / f"{self._sanitize_filename(file_patient.last_name)}_Envelope.docx"
-                    self._generate_cover_letter(file_patient, template_file, envelope_docx_path)
+                    if notice_level == NOTICE_LEVEL_NORMAL:
+                        self._generate_cover_letter(file_patient, template_file, envelope_docx_path)
+                    else:
+                        self._generate_notice_letter(file_patient, notice_level, total_due, envelope_docx_path)
 
                     if generate_csv:
                         csv_path = patient_dir / f"{base_name}_InvoiceItems_{date_str}.csv"
@@ -1410,7 +1487,7 @@ class PatientInvoiceGenerator:
                         run_history.record_invoice_run(
                             key, patient_display_name, service_start, service_end,
                             self.statement_date.strftime('%Y-%m-%d'), generated_filenames,
-                            db_path=db_path,
+                            notice_level=notice_level, db_path=db_path,
                         )
 
                 except Exception as e:

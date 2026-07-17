@@ -22,6 +22,26 @@ REQUIRED_TEMPLATE_PLACEHOLDERS = [
     '[Postal Code]', '[Patient Record Number]',
 ]
 
+# Escalating notice levels for a patient flagged as a possible duplicate
+# invoice (see run_history.suggest_notice_level()). NORMAL is a regular
+# invoice/statement; SECOND and FINAL replace the normal cover letter with
+# a collections reminder letter (templates/TEMPLATE_MAIL_MERGE_*_level_*.docx)
+# and change the statement title on the PDF/Excel invoice itself.
+NOTICE_LEVEL_NORMAL = 0
+NOTICE_LEVEL_SECOND = 1
+NOTICE_LEVEL_FINAL = 2
+
+NOTICE_LEVEL_TITLES = {
+    NOTICE_LEVEL_NORMAL: "PATIENT STATEMENT",
+    NOTICE_LEVEL_SECOND: "PATIENT STATEMENT - 2ND NOTICE",
+    NOTICE_LEVEL_FINAL: "PATIENT STATEMENT - FINAL NOTICE",
+}
+
+NOTICE_LEVEL_LABELS = {
+    NOTICE_LEVEL_SECOND: "2nd Notice",
+    NOTICE_LEVEL_FINAL: "Final Notice",
+}
+
 
 @dataclass
 class PatientData:
@@ -117,6 +137,10 @@ class ValidationIssue:
     severity: str  # "error" or "warning"
     patient_name: str  # raw name as it appears in the invoice workbook
     detail: str  # human-readable explanation, no PHI beyond the patient's own name
+    # Only set for category="duplicate_invoice": the notice level
+    # (NOTICE_LEVEL_SECOND/FINAL) run_history.suggest_notice_level()
+    # recommends sending instead of skipping this patient.
+    suggested_notice_level: Optional[int] = None
 
 
 @dataclass

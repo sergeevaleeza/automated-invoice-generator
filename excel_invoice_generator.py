@@ -22,7 +22,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as XLImage
 
-from invoice_models import PatientData, InvoiceLine, format_date_for_display
+from invoice_models import PatientData, InvoiceLine, format_date_for_display, NOTICE_LEVEL_NORMAL, NOTICE_LEVEL_TITLES
 from clinic_config import load_clinic_config
 from qr_code import resolve_qr_image_bytes
 
@@ -396,7 +396,8 @@ def _apply_page_setup(ws: Worksheet, last_row: int, header_row_idx: int, cfg: di
 def generate_excel_invoice(patient: PatientData, lines: List[InvoiceLine], total_due: float,
                             patient_df: pd.DataFrame, statement_date: datetime,
                             payment_due_date: datetime, has_cpt: bool, output_path: Path,
-                            clinic: Optional[dict] = None) -> None:
+                            clinic: Optional[dict] = None,
+                            notice_level: int = NOTICE_LEVEL_NORMAL) -> None:
     """Generate a print-ready Excel invoice matching the approved fixture layout.
 
     Takes the same inputs already assembled for _generate_pdf_invoice (lines,
@@ -411,9 +412,14 @@ def generate_excel_invoice(patient: PatientData, lines: List[InvoiceLine], total
     it through instead of reloading from disk per invoice. Tests inject a
     fixed dict here directly rather than depending on the real, gitignored
     clinic_config.json.
+
+    notice_level: NOTICE_LEVEL_NORMAL/SECOND/FINAL (invoice_models) — changes
+    the statement title to "PATIENT STATEMENT - 2ND NOTICE" / "- FINAL
+    NOTICE" for a patient the caller chose to send an escalated notice to.
     """
     clinic = clinic if clinic is not None else load_clinic_config()
     cfg = {**LAYOUT_CONFIG, **_clinic_derived_config(clinic)}
+    cfg["statement_title"] = NOTICE_LEVEL_TITLES[notice_level]
 
     wb, ws, header_row_idx, last_row = _build_workbook(
         patient, total_due, patient_df, statement_date, payment_due_date, has_cpt, cfg

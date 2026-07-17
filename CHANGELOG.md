@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased] — Escalating 2nd/Final Notice letters for duplicate invoices (2026-07-17)
+
+### Added
+
+#### 1. Send a notice instead of skipping a possible duplicate
+- The duplicate-invoice pre-flight check no longer just offers a skip checkbox. Each flagged patient now gets a 3-way choice — **Send 2nd/Final Notice** (default), **Regenerate normal invoice** (for a legitimate correction/reprint), or **Skip** — via `invoice_app.py`'s new per-patient `st.radio` in the "Possible duplicate invoice" expander.
+- `generate_invoices()` gained `notice_patient_levels: Dict[str, int]` (patient name -> `NOTICE_LEVEL_SECOND`/`FINAL`), alongside the existing `skip_patient_names`. A patient in both is skipped — skip wins, the more conservative choice.
+
+#### 2. Escalation logic: 2nd Notice, then Final Notice after 14 days
+- `run_history.suggest_notice_level(overlapping_runs, as_of_date, escalate_after_days=14)`: no prior notice on record -> 2nd Notice; a 2nd Notice already sent -> stays at 2nd Notice until 14 days have passed (matches the letters' own "contact us within 14 days" language), then escalates to Final Notice; a Final Notice already sent -> stays at Final (no further automatic tier).
+- `run_history`'s `invoice_runs` table gained a `notice_level` column (migrated in for pre-existing `run_history.db` files via a `PRAGMA table_info` check + `ALTER TABLE`, since SQLite has no "ADD COLUMN IF NOT EXISTS"). `validate_before_generation()`'s `duplicate_invoice` issues now carry `suggested_notice_level`, computed from the same escalation logic invoices themselves record — validation can't drift from what generation actually does.
+
+#### 3. Reminder letters, converted from the clinic's real Word mail-merge templates
+- The clinic provided two real Word mail-merge `.doc` letters (`templates/TEMPLATE_MAIL_MERGE_1st_level_YYYYMMDD.doc`, `_2nd_level_YYYYMMDD.doc` — kept committed as-is, alongside the derived versions, same as the existing cover-letter template). These are genuine legacy OLE2 `.doc` files with real Word `MERGEFIELD`/`NEXT` codes and a 10-record mail-merge "catalog" structure — not readable by python-docx (which needs `.docx`) and not usable directly as a single-patient template.
+- Converted both to single-record `.docx` files (`_YYYYMMDD.docx`) via Word COM automation (Word is installed locally): unlinked every mail-merge field to its plain-text result, truncated the document to the first record only (removing the repeated-block structure meant for Word's own batch printing), then replaced the merge fields' chevron placeholders (`«Date»`, `«Suffix» «Name»`, `«Amount»`) with this app's `[Bracket]` convention — `[Date]`, `[Full Name]` (dropping the suffix/title, since there's no such roster column — matches how the existing cover letter already greets patients), `[Amount]`. Wording is verbatim from the originals; only the field syntax and record count changed.
+- `PatientInvoiceGenerator._generate_notice_letter()` (new): fills these placeholders per patient, mirroring `_generate_cover_letter()`. Extracted the shared placeholder-substitution logic both now use into `_replace_placeholders_in_docx()` so it isn't duplicated between them.
+- The PDF/Excel statement title changes to `PATIENT STATEMENT - 2ND NOTICE` / `- FINAL NOTICE` for these patients (`invoice_models.NOTICE_LEVEL_TITLES`), threaded through `_generate_pdf_invoice()` and `generate_excel_invoice()`'s new `notice_level` parameter.
+- Added `tests/test_notice_letters.py` (18 tests): `suggest_notice_level()`'s escalation branches (including exactly-at-threshold and a custom window), `notice_level` round-tripping through `run_history` (including the pre-existing-DB migration path), letter content/placeholder substitution for both levels, PDF/Excel title changes, `validate_before_generation()` correctly suggesting and escalating notice levels across successive runs, and `generate_invoices()` integration (notice letter generated + correct level recorded, an unaffected patient still gets the normal cover letter, skip wins when a patient is in both sets). Full suite (86/86) and `AppTest` confirmed unaffected otherwise.
+
 ## [Unreleased] — Use the real Zelle QR image instead of a generated one (2026-07-16)
 
 ### Changed

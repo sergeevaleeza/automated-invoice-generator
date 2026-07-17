@@ -13,6 +13,7 @@ from complete_patient_invoice_generator import PatientInvoiceGenerator
 from invoice_models import (
     REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template, VALIDATION_CATEGORIES,
     PatientData, SuperbillServiceLine,
+    NOTICE_LEVEL_NORMAL, NOTICE_LEVEL_LABELS,
 )
 from clinic_config import get_clinic_config_source, ClinicConfigError
 from superbill_generator import generate_superbill_pdf
@@ -393,14 +394,26 @@ with tab3:
                 with st.expander(f"{label} ({len(category_issues)})"):
                     if category == "duplicate_invoice":
                         st.caption(
-                            "Checked = skip this patient in the run below. Uncheck to "
-                            "regenerate anyway (e.g. a legitimate correction/reprint)."
+                            "Defaults to sending an escalating notice letter instead of "
+                            "skipping. Switch to a normal invoice for a legitimate "
+                            "correction/reprint, or skip this patient entirely."
                         )
                         for issue in category_issues:
-                            st.checkbox(
-                                f"Skip **{issue.patient_name}** — {issue.detail}",
-                                value=True,
-                                key=f"dup_skip__{issue.patient_name}",
+                            notice_label = NOTICE_LEVEL_LABELS.get(issue.suggested_notice_level, "Notice")
+
+                            def _format_dup_action(opt, _label=notice_label):
+                                return {
+                                    "notice": f"Send {_label}",
+                                    "normal": "Regenerate normal invoice",
+                                    "skip": "Skip",
+                                }[opt]
+
+                            st.radio(
+                                f"**{issue.patient_name}** — {issue.detail}",
+                                options=["notice", "normal", "skip"],
+                                format_func=_format_dup_action,
+                                index=0,
+                                key=f"dup_action__{issue.patient_name}",
                             )
                     else:
                         for issue in category_issues:
@@ -424,14 +437,21 @@ with tab3:
     else:
         st.info("Run validation before generating reports.")
 
-    # Patients whose "Skip" checkbox (rendered above, in the duplicate-invoice
-    # expander) is checked — collected from whatever duplicate issues the
-    # current validation_report actually found.
+    # Per-patient duplicate-invoice choices (rendered above): "skip" ->
+    # skip_patient_names, "notice" -> notice_patient_levels (with the
+    # suggested NOTICE_LEVEL_SECOND/FINAL from validation), "normal" ->
+    # neither, falls through to a regular invoice.
     skip_patient_names = set()
+    notice_patient_levels = {}
     if validation_report is not None:
         for issue in validation_report.issues:
-            if issue.category == "duplicate_invoice" and st.session_state.get(f"dup_skip__{issue.patient_name}", True):
+            if issue.category != "duplicate_invoice":
+                continue
+            action = st.session_state.get(f"dup_action__{issue.patient_name}", "notice")
+            if action == "skip":
                 skip_patient_names.add(issue.patient_name)
+            elif action == "notice":
+                notice_patient_levels[issue.patient_name] = issue.suggested_notice_level
 
     generation_blocked = not st.session_state.get("validation_reviewed", False)
     if generation_blocked:
@@ -484,6 +504,7 @@ with tab3:
                         generate_csv=generate_csv,
                         export_format=export_format,
                         skip_patient_names=skip_patient_names,
+                        notice_patient_levels=notice_patient_levels,
                         validation_report=validation_report,
                     )
 
