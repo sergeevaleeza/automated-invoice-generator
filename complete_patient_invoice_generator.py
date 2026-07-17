@@ -32,6 +32,7 @@ from docx import Document
 from invoice_models import (
     PatientData, InvoiceLine, ProcessingSummary, ProcessedPatientRecord, format_date_for_display,
     REQUIRED_TEMPLATE_PLACEHOLDERS, ValidationIssue, ValidationReport, VALIDATION_CATEGORIES,
+    extract_embedded_cpt_code, SuperbillServiceLine,
 )
 from clinic_config import load_clinic_config
 import run_history
@@ -97,7 +98,9 @@ class PatientInvoiceGenerator:
             'paid': ["Paid", "Patient Paid", "Payments"],
             'previous_balance': ["Previous Balance", "Outstanding Balance", "Prior Balance", "Carryover"],
             'insurance': ["Insurance"],
-            'type_of_service': ["Type Of Service", "Service Type", "Description", "Service Description"]
+            'type_of_service': ["Type Of Service", "Service Type", "Description", "Service Description"],
+            'cpt_code': ["CPT Code", "CPT", "Procedure Code"],
+            'icd10_code': ["ICD-10", "ICD10", "Diagnosis Code", "ICD Code"],
         }
 
         # Setup logging
@@ -174,10 +177,7 @@ class PatientInvoiceGenerator:
         """
         if 'type_of_service' not in patient_df.columns:
             return False
-        for value in patient_df['type_of_service']:
-            if re.search(r'\b\d{5}\b', str(value)):
-                return True
-        return False
+        return any(extract_embedded_cpt_code(v) for v in patient_df['type_of_service'])
 
     def _count_pdf_pages(self, pdf_bytes: bytes) -> int:
         """Count pages in ReportLab-generated PDF by counting /Page objects"""
@@ -302,7 +302,7 @@ class PatientInvoiceGenerator:
                 column_mapping[actual_col] = col
 
             # Optional columns
-            optional_columns = ['previous_balance', 'insurance', 'type_of_service']
+            optional_columns = ['previous_balance', 'insurance', 'type_of_service', 'cpt_code', 'icd10_code']
             for col in optional_columns:
                 actual_col = self._normalize_column_name(df, col, custom_mapping)
                 if actual_col:
@@ -318,6 +318,10 @@ class PatientInvoiceGenerator:
                 df['insurance'] = ''
             if 'type_of_service' not in df.columns:
                 df['type_of_service'] = ''
+            if 'cpt_code' not in df.columns:
+                df['cpt_code'] = ''
+            if 'icd10_code' not in df.columns:
+                df['icd10_code'] = ''
 
             # Clean and convert data types
             df['total_amount'] = pd.to_numeric(df['total_amount'], errors='coerce').fillna(0)
@@ -325,8 +329,10 @@ class PatientInvoiceGenerator:
             df['paid'] = pd.to_numeric(df['paid'], errors='coerce').fillna(0)
             df['previous_balance'] = pd.to_numeric(df['previous_balance'], errors='coerce').fillna(0)
 
-            # Clean type_of_service column
+            # Clean text columns
             df['type_of_service'] = df['type_of_service'].fillna('').astype(str)
+            df['cpt_code'] = df['cpt_code'].fillna('').astype(str).str.strip()
+            df['icd10_code'] = df['icd10_code'].fillna('').astype(str).str.strip()
 
             return df
 
@@ -498,6 +504,45 @@ class PatientInvoiceGenerator:
         total_due = subtotal_copay - subtotal_paid
 
         return lines, total_due, patient_df
+
+    def resolve_superbill_service_lines(self, patient_df: pd.DataFrame) -> List[SuperbillServiceLine]:
+        """Build superbill service lines from a patient's invoice rows,
+        resolving each row's CPT code in priority order: (1) an explicit
+        cpt_code column in the workbook, (2) a 5-digit code embedded in
+        type_of_service (extract_embedded_cpt_code — same detection as
+        _has_cpt_codes, not duplicated), (3) clinic_config's
+        default_cpt_by_service_type mapping (matched on a lowercased
+        type_of_service), else blank. Always meant to be reviewed/edited
+        in the UI before generating — never silently trusted."""
+        default_cpt_map = {k.lower(): v for k, v in self.clinic.get('default_cpt_by_service_type', {}).items()}
+        lines = []
+        for _, row in patient_df.iterrows():
+            service_type = str(row.get('type_of_service', '')).strip()
+            workbook_cpt = str(row.get('cpt_code', '')).strip()
+            cpt = workbook_cpt or extract_embedded_cpt_code(service_type) or default_cpt_map.get(service_type.lower(), '')
+            lines.append(SuperbillServiceLine(
+                service_date=format_date_for_display(row.get('visit_date')),
+                cpt_code=cpt,
+                description=service_type,
+                charge=float(row.get('total_amount', 0) or 0),
+                payment=float(row.get('paid', 0) or 0),
+            ))
+        return lines
+
+    def resolve_default_icd10_codes(self, patient_df: pd.DataFrame) -> List[str]:
+        """Starting ICD-10 codes for a superbill: unique non-blank values
+        from the workbook's icd10_code column if present, else
+        clinic_config's default_icd10_codes. Always meant to be reviewed/
+        edited in the UI, not generated without staff confirmation —
+        diagnosis codes affect reimbursement and shouldn't be silently
+        auto-assigned."""
+        workbook_codes = sorted({
+            str(c).strip() for c in patient_df.get('icd10_code', [])
+            if str(c).strip()
+        })
+        if workbook_codes:
+            return workbook_codes
+        return list(self.clinic.get('default_icd10_codes', []))
 
     def _generate_pdf_invoice(self, patient: PatientData, lines: List[InvoiceLine],
                               total_due: float, patient_df: pd.DataFrame, output_path: Path):

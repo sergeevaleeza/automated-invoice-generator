@@ -28,6 +28,17 @@ REQUIRED_KEYS = [
     "provider_name_for_signature",
 ]
 
+# Optional fields, not in REQUIRED_KEYS — a config from before these
+# features existed keeps working unchanged (they just stay off/empty):
+#   show_qr / qr_content        — see qr_code.py
+#   default_icd10_codes         — list of ICD-10 strings pre-filled (still
+#                                  editable in the UI) on the superbill
+#   default_cpt_by_service_type — dict mapping a lowercased type_of_service
+#                                  value to a CPT code, used when the
+#                                  invoice workbook has no CPT column and
+#                                  none is embedded in the description
+#                                  (see invoice_models.extract_embedded_cpt_code)
+
 
 class ClinicConfigError(Exception):
     """Raised when clinic_config.json and Streamlit secrets are both

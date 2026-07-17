@@ -10,8 +10,12 @@ import os
 
 # Import your existing class
 from complete_patient_invoice_generator import PatientInvoiceGenerator
-from invoice_models import REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template, VALIDATION_CATEGORIES
+from invoice_models import (
+    REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template, VALIDATION_CATEGORIES,
+    PatientData, SuperbillServiceLine,
+)
 from clinic_config import get_clinic_config_source, ClinicConfigError
+from superbill_generator import generate_superbill_pdf
 
 # --- Config: cover letter template path + required placeholders ---
 TEMPLATE_CONFIG = {
@@ -29,7 +33,7 @@ st.title("🏥 Medical Invoice Generator")
 st.markdown("Generate patient invoices, cover letters, and reports automatically")
 
 # Create tabs for different sections
-tab1, tab2, tab3 = st.tabs(["📁 Upload Files", "⚙️ Settings", "📊 Generate Reports"])
+tab1, tab2, tab3, tab4 = st.tabs(["📁 Upload Files", "⚙️ Settings", "📊 Generate Reports", "🧾 Superbill"])
 
 with tab1:
     st.header("Upload Required Files")
@@ -152,6 +156,143 @@ with tab2:
             copay_col = st.text_input("Copay Column", placeholder="e.g., Co-pay")
             paid_col = st.text_input("Paid Column", placeholder="e.g., Patient Paid")
 
+    custom_mapping = {}
+    if name_col: custom_mapping['name'] = name_col
+    if visit_date_col: custom_mapping['visit_date'] = visit_date_col
+    if total_amount_col: custom_mapping['total_amount'] = total_amount_col
+    if copay_col: custom_mapping['copay'] = copay_col
+    if paid_col: custom_mapping['paid'] = paid_col
+
+# tab4 (Superbill) is rendered here, BEFORE tab3, even though it displays as
+# the 4th visual tab (st.tabs() controls visual order independently of
+# script execution order). tab3 below calls st.stop() when its own
+# prerequisites (e.g. the cover-letter template) aren't ready, which halts
+# the *entire* script, not just that tab — Superbill doesn't need a cover
+# letter template, so it would never render if placed after tab3.
+with tab4:
+    st.header("Superbill Export")
+    st.caption(
+        "Generate a single-patient superbill PDF for insurance reimbursement — "
+        "a separate export from the batch invoice run in 'Generate Reports'."
+    )
+
+    superbill_files_ready = all([roster_file, invoice_file])
+    if not superbill_files_ready:
+        st.warning("Please upload the Patient Roster and Invoice Data in the 'Upload Files' tab first.")
+        st.stop()
+
+    sb_clinic_config_error = None
+    try:
+        get_clinic_config_source()
+    except ClinicConfigError as e:
+        sb_clinic_config_error = str(e)
+    if sb_clinic_config_error:
+        st.error(f"⚠️ Clinic configuration problem: {sb_clinic_config_error}")
+        st.stop()
+
+    # Parse roster + invoice once per (files, settings) combination and
+    # cache in session_state — avoids re-parsing on every widget interaction
+    # (e.g. each keystroke while editing a CPT code below).
+    sb_fingerprint = (roster_file.file_id, invoice_file.file_id, amount_strategy, statement_date.isoformat())
+    if st.session_state.get("superbill_fingerprint") != sb_fingerprint:
+        with tempfile.TemporaryDirectory() as sb_temp_dir:
+            sb_temp_path = Path(sb_temp_dir)
+            sb_roster_path = sb_temp_path / "roster.csv"
+            sb_invoice_path = sb_temp_path / "invoice.xlsx"
+            with open(sb_roster_path, "wb") as f:
+                f.write(roster_file.getbuffer())
+            with open(sb_invoice_path, "wb") as f:
+                f.write(invoice_file.getbuffer())
+
+            sb_generator = PatientInvoiceGenerator(
+                amount_due_strategy=amount_strategy,
+                statement_date=statement_date.strftime("%Y-%m-%d"),
+            )
+            try:
+                st.session_state["superbill_patients"] = sb_generator.load_patient_roster(str(sb_roster_path))
+                st.session_state["superbill_invoice_df"] = sb_generator.load_invoice_data(
+                    str(sb_invoice_path), custom_mapping if custom_mapping else None
+                )
+                st.session_state["superbill_fingerprint"] = sb_fingerprint
+            except Exception as e:
+                st.error(f"Could not parse files: {str(e)}")
+                st.session_state.pop("superbill_invoice_df", None)
+
+    sb_invoice_df = st.session_state.get("superbill_invoice_df")
+    sb_patients = st.session_state.get("superbill_patients")
+
+    if sb_invoice_df is not None:
+        sb_generator = PatientInvoiceGenerator(
+            amount_due_strategy=amount_strategy, statement_date=statement_date.strftime("%Y-%m-%d")
+        )
+        patient_names = sorted(sb_invoice_df['name'].unique())
+        selected_name = st.selectbox("Select a patient", options=patient_names, key="superbill_patient_select")
+
+        if selected_name:
+            selected_patient_df = sb_invoice_df[sb_invoice_df['name'] == selected_name]
+            matched_patient, is_ambiguous, match_score = sb_generator._match_patient(selected_name, sb_patients)
+
+            if matched_patient:
+                sb_file_patient = matched_patient
+                st.info(
+                    f"Matched to roster: {matched_patient.first_name} {matched_patient.last_name} "
+                    f"(PRN: {matched_patient.prn}), confidence {match_score:.0%}"
+                )
+            else:
+                sb_first_name, sb_last_name = sb_generator._parse_patient_name(selected_name)
+                sb_file_patient = PatientData("", sb_first_name, sb_last_name, "", "", "", "", "", "")
+                st.warning("No roster match — DOB/address will be blank on the superbill unless you fix the roster first.")
+
+            service_lines = sb_generator.resolve_superbill_service_lines(selected_patient_df)
+            default_icd10 = sb_generator.resolve_default_icd10_codes(selected_patient_df)
+
+            st.subheader("Service Lines")
+            st.caption("CPT codes are auto-resolved (workbook column → embedded in description → clinic default) — review and correct before generating.")
+            lines_df = pd.DataFrame([{
+                "Date": l.service_date, "CPT Code": l.cpt_code, "Description": l.description,
+                "Charge": l.charge, "Payment": l.payment,
+            } for l in service_lines])
+            edited_lines_df = st.data_editor(
+                lines_df, use_container_width=True, num_rows="fixed",
+                key=f"sb_lines_{selected_name}",
+            )
+
+            st.subheader("Diagnosis Codes (ICD-10)")
+            icd10_text = st.text_input(
+                "Comma-separated ICD-10 codes",
+                value=", ".join(default_icd10),
+                key=f"sb_icd10_{selected_name}",
+                help="Pre-filled from the workbook's icd10_code column if present, else clinic_config's default_icd10_codes. Always review before generating.",
+            )
+            icd10_codes = [c.strip() for c in icd10_text.split(",") if c.strip()]
+
+            if st.button("🧾 Generate Superbill", type="primary"):
+                try:
+                    edited_service_lines = [
+                        SuperbillServiceLine(
+                            service_date=str(row["Date"]), cpt_code=str(row["CPT Code"]),
+                            description=str(row["Description"]), charge=float(row["Charge"]),
+                            payment=float(row["Payment"]),
+                        )
+                        for _, row in edited_lines_df.iterrows()
+                    ]
+                    with tempfile.TemporaryDirectory() as sb_out_dir:
+                        sb_out_path = Path(sb_out_dir) / f"Superbill_{sb_file_patient.last_name}_{statement_date.strftime('%Y%m%d')}.pdf"
+                        generate_superbill_pdf(
+                            patient=sb_file_patient, clinic=sb_generator.clinic,
+                            service_lines=edited_service_lines, icd10_codes=icd10_codes,
+                            statement_date=statement_date, output_path=sb_out_path,
+                        )
+                        st.success("✅ Superbill generated.")
+                        st.download_button(
+                            "📥 Download Superbill PDF",
+                            data=sb_out_path.read_bytes(),
+                            file_name=sb_out_path.name,
+                            mime="application/pdf",
+                        )
+                except Exception as e:
+                    st.error(f"Error generating superbill: {str(e)}")
+
 with tab3:
     st.header("Generate Reports")
 
@@ -198,14 +339,9 @@ with tab3:
         "Duplicate history is a local file and won't survive a Streamlit Cloud redeploy."
     )
 
-    # Custom mapping is defined in tab2 but used here and by validation below.
-    custom_mapping = {}
-    if name_col: custom_mapping['name'] = name_col
-    if visit_date_col: custom_mapping['visit_date'] = visit_date_col
-    if total_amount_col: custom_mapping['total_amount'] = total_amount_col
-    if copay_col: custom_mapping['copay'] = copay_col
-    if paid_col: custom_mapping['paid'] = paid_col
-
+    # custom_mapping is built in tab2, right after the column-mapping inputs,
+    # so it's available here and to the Superbill tab (tab4, which runs
+    # earlier in script order — see the comment above `with tab4:`).
     current_files_fingerprint = (roster_file.file_id, invoice_file.file_id)
     if st.session_state.get("validation_files_fingerprint") != current_files_fingerprint:
         # Roster/invoice changed since the last validation run (or this is
@@ -329,7 +465,7 @@ with tab3:
                         # Path to the bundled default template
                         shutil.copy(active_template_source, template_path)
 
-                    # custom_mapping was already built above, alongside validation
+                    # custom_mapping was already built in tab2
 
                     # Initialize generator
                     generator = PatientInvoiceGenerator(

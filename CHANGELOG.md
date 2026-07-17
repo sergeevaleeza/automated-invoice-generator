@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased] — Superbill export for a selected patient (2026-07-16)
+
+### Added
+
+#### 1. Single-patient superbill PDF, separate from the batch invoice flow
+- Added `superbill_generator.py`: `generate_superbill_pdf(patient, clinic, service_lines, icd10_codes, statement_date, output_path)` — a clean letterhead-styled document (not a pixel-perfect CMS-1500 form, per the spec) with practice header, "SUPERBILL" title, side-by-side provider/patient info (name, DOB, address, NPI, tax ID/EIN, practice address), diagnosis codes (ICD-10), a per-service-line table (date, CPT code, description, charge, payment) with a TOTAL row, and a signature line. Reuses `PatientData`/`SuperbillServiceLine` (from `invoice_models.py`) — no billing/matching logic duplicated; this module is presentation only.
+- `invoice_app.py`: new "🧾 Superbill" tab (4th tab). Once the roster and invoice files are uploaded, a patient `st.selectbox` lets the user pick one record; matched service lines and default ICD-10 codes are shown in an editable `st.data_editor` / `st.text_input` (CPT/ICD data is often not in the workbook, so the spec called for editable fields before generating) before the "🧾 Generate Superbill" button produces a download.
+- Parsed roster/invoice data is cached in `st.session_state` keyed on `(roster_file.file_id, invoice_file.file_id, amount_strategy, statement_date)`, so switching patients in the selectbox doesn't re-parse the workbook on every rerun.
+
+#### 2. Three-tier CPT code resolution and ICD-10 default resolution
+- `PatientInvoiceGenerator.resolve_superbill_service_lines(patient_df)`: for each service line, resolves a CPT code in priority order — (1) an explicit `cpt_code` workbook column if present, (2) a 5-digit code embedded in the `type_of_service` text (e.g. "Med Management (CPT Code 99213)"), via the new shared `invoice_models.extract_embedded_cpt_code()` (also used to de-duplicate the existing `_has_cpt_codes()` check), (3) `clinic_config.json`'s new optional `default_cpt_by_service_type` mapping (case-insensitive match on service type), else blank — always meant to be reviewed/edited in the UI before generating.
+- `PatientInvoiceGenerator.resolve_default_icd10_codes(patient_df)`: unique, sorted `icd10_code` workbook values if present, else `clinic_config.json`'s new optional `default_icd10_codes` list, else empty.
+- New optional `clinic_config.json` fields: `default_icd10_codes` and `default_cpt_by_service_type`. Not added to `REQUIRED_KEYS` — existing configs keep working unchanged. Documented with placeholder values in the committed `clinic_config.example.json` template (NPI/EIN and the mapping are clinic-specific and must not be hardcoded in source since the repo is public).
+- Added `tests/test_superbill.py` (12 tests): all three CPT resolution tiers, ICD-10 workbook-priority and clinic-default fallback (including the true "nothing configured" case), charge/payment/date pass-through, and PDF generation (single page, key identifying fields actually present in the decompressed content stream — ReportLab's default output is FlateDecode+ASCII85 compressed, so a raw-byte search wouldn't find embedded text).
+
+#### 3. Streamlit tab execution-order fix
+- Found while wiring up the new tab: `st.stop()` halts the *entire* script, not just the calling `with tabX:` block's rendering. The existing "📊 Generate Reports" tab calls `st.stop()` when its own prerequisites (e.g. a cover-letter template) aren't ready — which would have silently prevented the Superbill tab from ever rendering, since Streamlit tab bodies all execute top-to-bottom in script order regardless of which tab is visually selected. Fixed by moving the Superbill tab's body earlier in the script (before the Reports tab), with a comment explaining why — `st.tabs()` controls visual order independently of execution order.
+- While relocating code, found `custom_mapping` (the roster/invoice column-mapping dict) was actually being built inside the Reports tab despite a comment claiming it was "defined" earlier — which would have made it undefined for the now-earlier-running Superbill tab. Moved its construction to the Settings tab (immediately after the column-mapping UI it depends on) so both tabs can rely on it.
+
 ## [Unreleased] — QR code on invoices (2026-07-16)
 
 ### Added

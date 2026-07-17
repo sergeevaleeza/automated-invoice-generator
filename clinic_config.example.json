@@ -14,5 +14,10 @@
   "check_payable_to": "Jane A. Doe, MD",
   "provider_name_for_signature": "Jane A. Doe, MD",
   "show_qr": false,
-  "qr_content": "https://yourclinic.example.com/pricing.html"
+  "qr_content": "https://yourclinic.example.com/pricing.html",
+  "default_icd10_codes": ["Z00.00"],
+  "default_cpt_by_service_type": {
+    "psychotherapy": "90837",
+    "med management": "99213"
+  }
 }

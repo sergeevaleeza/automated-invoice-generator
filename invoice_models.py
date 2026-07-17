@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Optional, Union, BinaryIO
 import logging
+import re
 
 import pandas as pd
 
@@ -44,6 +45,31 @@ class InvoiceLine:
     amount: float
     is_previous_balance: bool = False
     is_credit: bool = False  # True for negative previous balance (overpayment shown as credit)
+
+
+@dataclass
+class SuperbillServiceLine:
+    """One service line on a superbill — CPT code is resolved (workbook
+    column, embedded in the description, or a clinic_config default) but
+    always reviewable/editable in the UI before generating."""
+    service_date: str
+    cpt_code: str
+    description: str
+    charge: float
+    payment: float
+
+
+_CPT_CODE_PATTERN = re.compile(r'\b\d{5}\b')
+
+
+def extract_embedded_cpt_code(text: str) -> Optional[str]:
+    """Find a 5-digit CPT code embedded in free text (e.g. 'Med Management
+    (CPT Code 99213)' -> '99213'), or None. Shared by
+    PatientInvoiceGenerator._has_cpt_codes() (PDF header EIN/NPI trigger)
+    and the superbill's per-line CPT resolution, so the detection pattern
+    can't drift between the two."""
+    match = _CPT_CODE_PATTERN.search(str(text))
+    return match.group(0) if match else None
 
 
 @dataclass
