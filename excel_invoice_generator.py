@@ -52,9 +52,12 @@ CONFIG = {
     "default_service_description": "Psychotherapy and/or Med Management",
 
     "font_family": "Arial",
-    # Columns B and E are intentionally absent here — the fixture leaves them
-    # at Excel's implicit default width rather than setting them explicitly.
-    "col_widths": {"A": 15, "C": 32.140625, "D": 20.140625},
+    # Pixel targets (per on-screen review): A=105, B=64, C=225, D=140, E=140.
+    # Converted via Excel's standard width<->pixel formula, width = (px-5)/7
+    # (B's 8.43 matches Excel's well-known canonical default exactly, which
+    # validates the formula). D/E are equal so the payment-notice box has
+    # enough room for its text to wrap the same way it was authored.
+    "col_widths": {"A": 14.29, "B": 8.43, "C": 31.43, "D": 19.29, "E": 19.29},
     "header_fill_color": "D9D9D9",
 
     "margins": dict(left=0.65, right=0.65, top=0.4, bottom=0.6, header=0.2, footer=0.2),
@@ -79,7 +82,6 @@ CONFIG["usable_height_pt"] = (
 # Matches the fixture's literal number_format string exactly (backslash-escaped).
 CURRENCY_FMT = r'\$#,##0.00;\-\$#,##0.00;"$ -"'
 THIN = Side(style="thin", color="000000")
-NONE_SIDE = Side()  # explicit "no border" side — Border() leaves omitted sides as raw None, not this
 CELL_BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
 
@@ -118,11 +120,10 @@ def _count_wrapped_lines(text_lines: List[str], col_width_units: float, font_siz
 
 def apply_box_border(ws: Worksheet, min_row: int, min_col: int, max_row: int, max_col: int,
                       style: str = "thin") -> None:
-    """Draw a single outline box around a multi-column cell range (merged or
-    not), setting only the true perimeter edge on each boundary cell — no
-    internal divider lines. Not meant for single-column ranges (a min_col ==
-    max_col box needs top/bottom-only styling handled by the caller, since a
-    one-column "box" has no distinct left/right edge)."""
+    """Draw a single outline box around a cell range (merged or not, single-
+    or multi-column), setting only the true perimeter edge on each boundary
+    cell — no internal divider lines. For a single-column range, the one
+    column correctly gets both its left and right edge styled."""
     side = Side(style=style, color="000000")
     for r in range(min_row, max_row + 1):
         for c in range(min_col, max_col + 1):
@@ -210,7 +211,7 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     # floors at 5 rows to match the fixture and grows only for addresses
     # too long to fit that (Excel won't auto-grow wrapped merged-cell rows).
     wrapped_patient_lines = _count_wrapped_lines(
-        patient_lines, cfg["col_widths"]["A"] + 8.43, fonts["contact"])  # B defaults to ~8.43
+        patient_lines, cfg["col_widths"]["A"] + cfg["col_widths"]["B"], fonts["contact"])
 
     info_row_start = row
     n_info_lines = max(wrapped_patient_lines, 5)
@@ -313,12 +314,11 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     set_row_height(row, heights["spacer_after_items"])
     row += 1
 
-    # --- Bottom boxes: "YOUR PORTION DUE" (col C only, top/bottom rule, no
-    # left/right border) and "AMOUNT ENCLOSED" (D:E merged, full outline) ---
+    # --- Bottom boxes: "YOUR PORTION DUE" (col C) and "AMOUNT ENCLOSED"
+    # (D:E merged) — both get a complete outline border. ---
     portion_label_row = row
     ws.cell(row=row, column=3, value=cfg["amount_due_label"]).font = subtotal_total_font
     ws.cell(row=row, column=3).alignment = left_center
-    ws.cell(row=row, column=3).border = Border(top=THIN, left=NONE_SIDE, right=NONE_SIDE, bottom=NONE_SIDE)
     merged(row, 4, row, 5, cfg["amount_enclosed_label"], subtotal_total_font, left_center)
     set_row_height(row, heights["amount_box"])
     row += 1
@@ -327,10 +327,10 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     due_cell.font = subtotal_total_font
     due_cell.alignment = left_center
     due_cell.number_format = CURRENCY_FMT
-    due_cell.border = Border(bottom=THIN, left=NONE_SIDE, right=NONE_SIDE, top=NONE_SIDE)
     merged(row, 4, row, 5, "", subtotal_total_font, left_center)
     set_row_height(row, heights["amount_box"])
     row += 1
+    apply_box_border(ws, portion_label_row, 3, portion_value_row, 3)
     apply_box_border(ws, portion_label_row, 4, portion_value_row, 5)
     set_row_height(row, heights["spacer_after_amount"])
     row += 1
