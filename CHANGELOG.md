@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased] — Phase 1 item 1: HIPAA/open-source hygiene sweep (2026-07-16)
+
+### Security / Findings
+
+#### 1. Repo/history audit — no additional real data found
+- Checked every `.xlsx`/`.xls`/`.csv`/`.docx` ever added across all branches (`git log --all --diff-filter=A`): only two files have ever existed in this repo's history — `templates/Access_Multi_Letter_Cover.docx` and `tests/fixtures/Example_2026_Invoice_07162026.xlsx` — both already accounted for (the latter is the real-PHI incident from the previous entry, already remediated). No other data files, in history or the current tree.
+- Purged the previous incident's dangling git objects from local storage too (`git reflog expire --expire=now --all && git gc --prune=now --aggressive`) as defense in depth, on top of the earlier remote-side fix. Confirmed zero unreachable objects remain.
+
+#### 2. PHI removed from application logs and UI exception output
+- `self.logger.*()` calls in `complete_patient_invoice_generator.py` no longer include patient names or full file paths (paths contain the patient's last name via the folder-naming scheme) — found leaking in: a full roster-row dump on load, fuzzy-match logging (patient names + PRN), ambiguous/credit-balance/zero-balance/error logging per patient, and "Generated X" confirmations that included the identifying output path. PRN is kept in the fuzzy-match log line (useful for debugging, materially less sensitive than name+DOB+address) — everything else identifying was dropped or genericized.
+- Removed `st.exception(e)` from `invoice_app.py`'s error handler — a full traceback can echo patient data from local variables in the call stack; `st.error(str(e))` (already present) is kept for basic diagnosis.
+- Deliberately did NOT touch the "Successfully Processed/Skipped/Errors" patient lists shown in the UI or the `Processing_Summary_*.txt` file — showing staff which patients were processed, by name, is the app's core authorized function, not a leak. The distinction drawn here is server-side application logs (potentially retained/visible outside the practice, e.g. via hosting-provider log aggregation) vs. the in-app results the staff generating these specific invoices are already authorized to see.
+- Confirmed no filenames are written outside `output_dir` containing patient data (uploaded files are saved under generic names in a temp dir; the only root-level file in `output_dir` is the genericly-named summary report).
+
+### Added
+
+#### 3. Clinic identity moved to `clinic_config.json` (gitignored) + example template
+- Added `clinic_config.py`: `load_clinic_config()` reads `clinic_config.json`, validates all required fields are present, and raises `ClinicConfigError` (a message safe to show directly in the UI — never contains patient data) if the file is missing or incomplete. Deliberately does **not** silently fall back to placeholder data on its own — generating a real-looking invoice with fake clinic identity baked in would be worse than failing loudly.
+- Added `clinic_config.example.json` (committed) as the placeholder template, and a local, gitignored `clinic_config.json` populated with the practice's real values so the running app is unaffected.
+- `excel_invoice_generator.py`: split the old `CONFIG` dict into `LAYOUT_CONFIG` (static: fonts, widths, margins, row heights, non-identity labels) and `_clinic_derived_config(clinic)` (builds the identity-derived display strings — header lines, payment-notice text, signature label, footer — from a loaded clinic dict). `generate_excel_invoice()` now takes an optional `clinic` parameter (defaults to `load_clinic_config()`) so callers/tests can inject a config instead of depending on the real file.
+- `complete_patient_invoice_generator.py`: `PatientInvoiceGenerator.__init__()` now loads clinic config into `self.clinic` (also injectable via a new `clinic_config` constructor param) and every hardcoded clinic string in `_generate_pdf_invoice()`, `add_optimized_footer()`, and the unused-but-still-public `_generate_envelope_pdf()` now reads from it instead.
+- `invoice_app.py`: added a proactive check on the "Generate Reports" tab that shows a clear `st.error()` (reusing `ClinicConfigError`'s message) and blocks generation if `clinic_config.json` is missing/invalid, mirroring the existing cover-letter-template pattern.
+- Tests never touch the real `clinic_config.json` — `tests/conftest.py` loads `clinic_config.example.json` instead and injects it explicitly, so the suite is fully self-contained and runs in a fresh clone/CI with no real business data present (verified by temporarily removing the local `clinic_config.json` and re-running the suite). The golden fixture was regenerated using the placeholder identity, so it no longer shows the real clinic's name — a deliberate, correct change, not a regression.
+
+#### 4. `.gitignore` added (none existed before)
+- Covers: `clinic_config.json`; `data/` and `output/` (runtime PHI); `*.xlsx`/`*.xls`/`*.csv`/`*.docx` everywhere, with explicit negations for the three files that should stay tracked (`clinic_config.example.json`, `templates/**/*.docx`, `tests/fixtures/**/*.xlsx`/`*.csv`/`*.docx`); `__pycache__/`, `*.pyc`/`*.pyo`; `.pytest_cache/`; common venv/editor cruft.
+- Untracked the 7 `.pyc` files that were previously committed (`git rm -r --cached __pycache__ tests/__pycache__`) — they'll regenerate locally as needed and no longer show up as noise in every diff.
+
 ## [Unreleased] — Phase 0: Excel layout match (2026-07-16)
 
 ### Security

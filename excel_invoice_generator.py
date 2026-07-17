@@ -11,7 +11,7 @@ dates, and the has_cpt flag) so no billing business logic is duplicated here
 import math
 from pathlib import Path
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 from openpyxl import Workbook
@@ -21,34 +21,17 @@ from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter
 
 from invoice_models import PatientData, InvoiceLine, format_date_for_display
+from clinic_config import load_clinic_config
 
-# --- Configuration block: fonts, labels, widths, margins, row heights ------
-CONFIG = {
-    "clinic_name": "ACCESS MULTI-SPECIALTY MEDICAL CLINIC, INC.",
-    "doctor_name": "MICHAEL U. LEVINSON, MD, PH D.",
-    "specialty": "BOARD CERTIFIED PSYCHIATRIST",
-    "ein_npi": "EIN: 94-3368586    NPI: 1245365782",
-    "office_address": "OFFICE ADDRESS: 25 EDWARDS COURT, SUITE 101, BURLINGAME, CA 94010",
-    "mailing_address": "MAILING ADDRESS: PO BOX 351, BURLINGAME, CA 94011",
-    "email": "EMAIL: ACCESS.MSMC@GMAIL.COM",
-    "website": "WEBSITE: https://accessmultispecialty.com/",
-    # Fixed literal lines (not auto-wrapped) — sized to fit exactly the 5
-    # rows of the notice box (rows 10-14) at 15.0pt each. Whitespace is
-    # significant here and matches the approved fixture exactly.
-    "payment_instructions": [
-        "Please note we do not accept credit cards.",
-        "1. Zelle access.msmc@gmail.com ",
-        "   (IRA Billing and Mgmt)",
-        "2. Check payable to: Michael Levinson, MD",
-        "    PO Box 351, Burlingame, CA 94011",
-    ],
+# --- Static layout config: labels, widths, margins, row heights, fonts ----
+# Clinic identity (name, addresses, EIN/NPI, payment info) is NOT here — it's
+# loaded at call time from clinic_config.json via _clinic_derived_config()
+# below, so no real practice's business identity is hardcoded in source.
+LAYOUT_CONFIG = {
     "statement_title": "PATIENT STATEMENT",
     "table_headers": ["Service Date(s)", "Description", "Amount Paid", "Copay/Deductible"],
     "amount_due_label": "YOUR PORTION DUE:",
     "amount_enclosed_label": "AMOUNT ENCLOSED:",
-    "signature_label": "Provider Signature - Michael Levinson, MD",
-    "footer_line1": "If you have questions regarding your bill, please contact us at (415)857-1151.",
-    "footer_line2": "For current pricing, please visit: https://accessmultispecialty.com/pricing.html",
     "default_service_description": "Psychotherapy and/or Med Management",
 
     "font_family": "Arial",
@@ -75,9 +58,38 @@ CONFIG = {
 }
 
 _LETTER_HEIGHT_IN = 11.0
-CONFIG["usable_height_pt"] = (
-    _LETTER_HEIGHT_IN - CONFIG["margins"]["top"] - CONFIG["margins"]["bottom"]
+LAYOUT_CONFIG["usable_height_pt"] = (
+    _LETTER_HEIGHT_IN - LAYOUT_CONFIG["margins"]["top"] - LAYOUT_CONFIG["margins"]["bottom"]
 ) * 72
+
+
+def _clinic_derived_config(clinic: dict) -> dict:
+    """Build the clinic-identity-derived display strings (header lines,
+    payment-notice text, signature label, footer) from a loaded clinic
+    config dict. Wording/formatting is fixed (matches the approved
+    layout); only the underlying values come from clinic_config.json."""
+    return {
+        "clinic_name": clinic["clinic_name"],
+        "doctor_name": clinic["doctor_name"],
+        "specialty": clinic["specialty"],
+        "ein_npi": f"EIN: {clinic['ein']}    NPI: {clinic['npi']}",
+        "office_address": f"OFFICE ADDRESS: {clinic['office_address']}",
+        "mailing_address": f"MAILING ADDRESS: {clinic['mailing_address']}",
+        "email": f"EMAIL: {clinic['email']}",
+        "website": f"WEBSITE: {clinic['website']}",
+        # Fixed literal lines (not auto-wrapped) — sized to fit exactly the 5
+        # rows of the notice box (rows 10-14) at 15.0pt each.
+        "payment_instructions": [
+            "Please note we do not accept credit cards.",
+            f"1. Zelle {clinic['zelle_email']} ",
+            "   (IRA Billing and Mgmt)",
+            f"2. Check payable to: {clinic['check_payable_to']}",
+            f"    {clinic['mailing_address']}",
+        ],
+        "signature_label": f"Provider Signature - {clinic['provider_name_for_signature']}",
+        "footer_line1": f"If you have questions regarding your bill, please contact us at {clinic['phone']}.",
+        "footer_line2": f"For current pricing, please visit: {clinic['pricing_page_url']}",
+    }
 
 # Matches the fixture's literal number_format string exactly (backslash-escaped).
 CURRENCY_FMT = r'\$#,##0.00;\-\$#,##0.00;"$ -"'
@@ -139,9 +151,8 @@ def apply_box_border(ws: Worksheet, min_row: int, min_col: int, max_row: int, ma
 
 def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataFrame,
                      statement_date: datetime, payment_due_date: datetime,
-                     has_cpt: bool) -> Tuple[Workbook, Worksheet, int, int]:
+                     has_cpt: bool, cfg: dict) -> Tuple[Workbook, Worksheet, int, int]:
     """Build the invoice worksheet. Returns (workbook, worksheet, header_row_idx, last_row)."""
-    cfg = CONFIG
     fonts = cfg["fonts"]
     heights = cfg["row_heights"]
     wb = Workbook()
@@ -206,7 +217,7 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     payment_text = "\n".join(cfg["payment_instructions"])
 
     # The payment-notice text is fixed literal content designed to fit
-    # exactly 5 rows (see CONFIG comment) — only the patient address varies
+    # exactly 5 rows (see _clinic_derived_config) — only the patient address varies
     # per invoice, so only it needs dynamic wrap-based sizing. The box
     # floors at 5 rows to match the fixture and grows only for addresses
     # too long to fit that (Excel won't auto-grow wrapped merged-cell rows).
@@ -347,8 +358,7 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     return wb, ws, header_row_idx, last_row
 
 
-def _apply_page_setup(ws: Worksheet, last_row: int, header_row_idx: int):
-    cfg = CONFIG
+def _apply_page_setup(ws: Worksheet, last_row: int, header_row_idx: int, cfg: dict):
     ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_margins = PageMargins(**cfg["margins"])
@@ -366,7 +376,8 @@ def _apply_page_setup(ws: Worksheet, last_row: int, header_row_idx: int):
 
 def generate_excel_invoice(patient: PatientData, lines: List[InvoiceLine], total_due: float,
                             patient_df: pd.DataFrame, statement_date: datetime,
-                            payment_due_date: datetime, has_cpt: bool, output_path: Path) -> None:
+                            payment_due_date: datetime, has_cpt: bool, output_path: Path,
+                            clinic: Optional[dict] = None) -> None:
     """Generate a print-ready Excel invoice matching the approved fixture layout.
 
     Takes the same inputs already assembled for _generate_pdf_invoice (lines,
@@ -374,11 +385,21 @@ def generate_excel_invoice(patient: PatientData, lines: List[InvoiceLine], total
     Rows extend downward for item counts beyond the fixture's 8, keeping the
     same relative structure; fitToPage print scaling handles fitting the
     result onto one printed Letter page regardless of row count.
+
+    clinic: pre-loaded clinic identity dict (see clinic_config.py). Defaults
+    to load_clinic_config() — callers that already loaded it once (e.g. to
+    share across the PDF and Excel generators in one batch run) should pass
+    it through instead of reloading from disk per invoice. Tests inject a
+    fixed dict here directly rather than depending on the real, gitignored
+    clinic_config.json.
     """
+    clinic = clinic if clinic is not None else load_clinic_config()
+    cfg = {**LAYOUT_CONFIG, **_clinic_derived_config(clinic)}
+
     wb, ws, header_row_idx, last_row = _build_workbook(
-        patient, total_due, patient_df, statement_date, payment_due_date, has_cpt
+        patient, total_due, patient_df, statement_date, payment_due_date, has_cpt, cfg
     )
-    _apply_page_setup(ws, last_row, header_row_idx)
+    _apply_page_setup(ws, last_row, header_row_idx, cfg)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(output_path))

@@ -1,0 +1,37 @@
+# Clinic identity — real business data, never committed. Use
+# clinic_config.example.json as the template.
+clinic_config.json
+
+# Runtime data: uploaded/generated patient data, run history, batch output.
+# Nothing under these paths should ever be committed — they hold real
+# patient data (PHI) once the app is actually used.
+data/
+output/
+*.xlsx
+*.xls
+*.csv
+*.docx
+!clinic_config.example.json
+!templates/**/*.docx
+!tests/fixtures/**/*.xlsx
+!tests/fixtures/**/*.csv
+!tests/fixtures/**/*.docx
+
+# Python bytecode cache — machine/interpreter-specific, shouldn't be
+# committed (also regenerates automatically, so tracking it just creates
+# unnecessary diff noise on every run).
+__pycache__/
+*.pyc
+*.pyo
+
+# Test/tooling caches
+.pytest_cache/
+
+# Local environment
+.venv/
+venv/
+*.egg-info/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db

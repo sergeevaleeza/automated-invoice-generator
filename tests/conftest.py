@@ -8,9 +8,16 @@ import pandas as pd
 import pytest
 
 from invoice_models import PatientData
+from clinic_config import load_clinic_config, EXAMPLE_CONFIG_PATH
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 GOLDEN_INVOICE_PATH = FIXTURES_DIR / "Example_2026_Invoice_07162026.xlsx"
+
+# Tests use the committed clinic_config.example.json (placeholder identity),
+# never the real, gitignored clinic_config.json — so the suite is
+# self-contained and runs in a fresh clone/CI without any real business
+# data present.
+TEST_CLINIC_CONFIG = load_clinic_config(path=EXAMPLE_CONFIG_PATH)
 
 
 @pytest.fixture
@@ -46,4 +53,5 @@ def golden_invoice_inputs():
         statement_date=datetime(2026, 7, 16),
         payment_due_date=datetime(2026, 8, 17),
         has_cpt=False,
+        clinic=TEST_CLINIC_CONFIG,
     )

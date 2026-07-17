@@ -1,0 +1,16 @@
+{
+  "clinic_name": "YOUR CLINIC NAME, INC.",
+  "doctor_name": "JANE A. DOE, MD",
+  "specialty": "BOARD CERTIFIED PHYSICIAN",
+  "ein": "00-0000000",
+  "npi": "0000000000",
+  "office_address": "123 MAIN STREET, SUITE 100, YOUR CITY, ST 00000",
+  "mailing_address": "PO BOX 000, YOUR CITY, ST 00000",
+  "email": "BILLING@YOURCLINIC.COM",
+  "website": "https://yourclinic.example.com/",
+  "pricing_page_url": "https://yourclinic.example.com/pricing.html",
+  "phone": "(000)000-0000",
+  "zelle_email": "billing@yourclinic.com",
+  "check_payable_to": "Jane A. Doe, MD",
+  "provider_name_for_signature": "Jane A. Doe, MD"
+}

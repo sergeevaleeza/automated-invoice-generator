@@ -11,6 +11,7 @@ import os
 # Import your existing class
 from complete_patient_invoice_generator import PatientInvoiceGenerator
 from invoice_models import REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template
+from clinic_config import load_clinic_config, ClinicConfigError
 
 # --- Config: cover letter template path + required placeholders ---
 TEMPLATE_CONFIG = {
@@ -153,12 +154,22 @@ with tab2:
 
 with tab3:
     st.header("Generate Reports")
-    
+
+    clinic_config_error = None
+    try:
+        load_clinic_config()
+    except ClinicConfigError as e:
+        clinic_config_error = str(e)
+
+    if clinic_config_error:
+        st.error(f"⚠️ Clinic configuration problem: {clinic_config_error}")
+
     # Check if all required files are uploaded / available
-    files_ready = all([roster_file, invoice_file]) and active_template_source is not None
+    files_ready = all([roster_file, invoice_file]) and active_template_source is not None and not clinic_config_error
 
     if not files_ready:
-        st.warning("Please upload all required files in the 'Upload Files' tab before generating reports.")
+        if not clinic_config_error:
+            st.warning("Please upload all required files in the 'Upload Files' tab before generating reports.")
         st.stop()
     
     st.success("All required files uploaded successfully!")
@@ -285,8 +296,10 @@ with tab3:
                         )
         
         except Exception as e:
+            # No st.exception(e) here: a full traceback can echo back
+            # patient data from local variables in the call stack, which
+            # shouldn't be rendered in the UI.
             st.error(f"Error generating invoices: {str(e)}")
-            st.exception(e)
 
 # Sidebar with instructions
 with st.sidebar:

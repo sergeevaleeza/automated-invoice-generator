@@ -32,6 +32,7 @@ from invoice_models import (
     PatientData, InvoiceLine, ProcessingSummary, format_date_for_display,
     REQUIRED_TEMPLATE_PLACEHOLDERS,
 )
+from clinic_config import load_clinic_config
 
 # Excel invoice generation (mirrors the PDF layout, no shared business logic)
 from excel_invoice_generator import generate_excel_invoice
@@ -67,10 +68,15 @@ class PatientInvoiceGenerator:
              font_body=7, font_header=9, font_header2=8, font_title=10, font_table=6),
     ]
 
-    def __init__(self, amount_due_strategy: str = "auto", statement_date: Optional[str] = None):
+    def __init__(self, amount_due_strategy: str = "auto", statement_date: Optional[str] = None,
+                 clinic_config: Optional[Dict] = None):
         self.amount_due_strategy = amount_due_strategy
         self.statement_date = datetime.strptime(statement_date, "%Y-%m-%d") if statement_date else datetime.now()
         self.payment_due_date = self._calculate_payment_due_date()
+        # Raises ClinicConfigError (caught upstream, shown via st.error) if
+        # clinic_config.json is missing/incomplete — fail fast rather than
+        # generate invoices with wrong or placeholder clinic identity.
+        self.clinic = clinic_config if clinic_config is not None else load_clinic_config()
 
         # Column mapping for normalization
         self.column_aliases = {
@@ -189,11 +195,7 @@ class PatientInvoiceGenerator:
         try:
             df = pd.read_csv(roster_file)
             self.logger.info(f"Loaded roster with {len(df)} patients")
-
-            # Print first few rows to understand the structure
             self.logger.info(f"Roster columns: {list(df.columns)}")
-            if len(df) > 0:
-                self.logger.info(f"Sample row: {df.iloc[0].to_dict()}")
 
             patients = {}
 
@@ -412,10 +414,10 @@ class PatientInvoiceGenerator:
             matches.sort(key=lambda x: x[1], reverse=True)
             best_match = matches[0]
 
-            # Log the fuzzy match with detailed scores
-            self.logger.info(f"Fuzzy match found for '{name}': "
-                           f"{best_match[0].first_name} {best_match[0].last_name} "
-                           f"(PRN: {best_match[0].prn}) - Overall: {best_match[1]:.1%}, "
+            # Log the fuzzy match with detailed scores — PRN only, no names
+            # (application logs may be retained/visible outside the practice's
+            # own review, e.g. hosting provider log aggregation)
+            self.logger.info(f"Fuzzy match found (PRN: {best_match[0].prn}) - Overall: {best_match[1]:.1%}, "
                            f"First: {best_match[2]:.1%}, Last: {best_match[3]:.1%}")
 
             # Return ambiguous if multiple high-scoring matches
@@ -424,7 +426,7 @@ class PatientInvoiceGenerator:
             return best_match[0], is_ambiguous
 
         # No match found
-        self.logger.warning(f"No patient match found for: {name}")
+        self.logger.warning("No patient match found for a roster entry")
         return None, False
 
     def _generate_invoice_lines(self, patient_df: pd.DataFrame) -> Tuple[List[InvoiceLine], float, pd.DataFrame]:
@@ -517,19 +519,19 @@ class PatientInvoiceGenerator:
                 )
 
                 # --- Clinic header (font reduced to 10 from previous 12) ---
-                story.append(Paragraph("ACCESS MULTI-SPECIALTY MEDICAL CLINIC, INC.", header_style))
-                story.append(Paragraph("MICHAEL U. LEVINSON, MD, PH D.", header_style))
-                story.append(Paragraph("BOARD CERTIFIED PSYCHIATRIST", header_style))
+                story.append(Paragraph(self.clinic['clinic_name'], header_style))
+                story.append(Paragraph(self.clinic['doctor_name'], header_style))
+                story.append(Paragraph(self.clinic['specialty'], header_style))
                 # Conditionally add EIN/NPI when CPT codes are detected
                 if has_cpt:
-                    story.append(Paragraph("EIN: 94-3368586    NPI: 1245365782", header_style))
+                    story.append(Paragraph(f"EIN: {self.clinic['ein']}    NPI: {self.clinic['npi']}", header_style))
                 story.append(Spacer(1, p['spacer_header']))
 
                 # --- Contact info block (added WEBSITE line) ---
-                story.append(Paragraph("OFFICE ADDRESS: 25 EDWARDS COURT, SUITE 101, BURLINGAME, CA 94010", header_2_style))
-                story.append(Paragraph("MAILING ADDRESS: PO BOX 351, BURLINGAME, CA 94011", header_2_style))
-                story.append(Paragraph("EMAIL: ACCESS.MSMC@GMAIL.COM", header_2_style))
-                story.append(Paragraph("WEBSITE: https://accessmultispecialty.com/", header_2_style))
+                story.append(Paragraph(f"OFFICE ADDRESS: {self.clinic['office_address']}", header_2_style))
+                story.append(Paragraph(f"MAILING ADDRESS: {self.clinic['mailing_address']}", header_2_style))
+                story.append(Paragraph(f"EMAIL: {self.clinic['email']}", header_2_style))
+                story.append(Paragraph(f"WEBSITE: {self.clinic['website']}", header_2_style))
                 story.append(Spacer(1, p['spacer_sections']))
 
                 # --- Patient info + payment instructions side by side ---
@@ -544,10 +546,12 @@ class PatientInvoiceGenerator:
                     patient_info_text += f"{patient.address_line2}\n"
                 patient_info_text += f"{patient.city}, {patient.state} {display_postal}"
 
-                payment_info_text = ("Please note we do not accept credit cards.\n"
-                                     "1. Zelle access.msmc@gmail.com (IRA Billing and Mgmt)\n"
-                                     "2. Check payable to: Michael Levinson, MD\n"
-                                     "   PO Box 351, Burlingame, CA 94011")
+                payment_info_text = (
+                    "Please note we do not accept credit cards.\n"
+                    f"1. Zelle {self.clinic['zelle_email']} (IRA Billing and Mgmt)\n"
+                    f"2. Check payable to: {self.clinic['check_payable_to']}\n"
+                    f"   {self.clinic['mailing_address']}"
+                )
 
                 combined_table = Table([[patient_info_text, payment_info_text]], colWidths=[3 * inch, 3 * inch])
                 combined_table.setStyle(TableStyle([
@@ -675,7 +679,7 @@ class PatientInvoiceGenerator:
                 )
                 story.append(Paragraph("_________________________________", signature_style))
                 story.append(Spacer(1, 8))
-                story.append(Paragraph("Provider Signature - Michael Levinson, MD", signature_style))
+                story.append(Paragraph(f"Provider Signature - {self.clinic['provider_name_for_signature']}", signature_style))
 
                 doc.build(story, onFirstPage=self.add_optimized_footer, onLaterPages=self.add_optimized_footer)
                 return buf.getvalue()
@@ -691,7 +695,7 @@ class PatientInvoiceGenerator:
                     break
 
             output_path.write_bytes(last_pdf_bytes)
-            self.logger.info(f"Generated PDF invoice: {output_path}")
+            self.logger.info("Generated PDF invoice")  # path omitted: contains patient name
 
         except Exception as e:
             self.logger.error(f"Error generating PDF invoice: {e}")
@@ -703,8 +707,8 @@ class PatientInvoiceGenerator:
         font_size = 8
         canvas.setFont("Helvetica", font_size)
 
-        line1 = "If you have questions regarding your bill, please contact us at (415)857-1151."
-        line2 = "For current pricing, please visit: https://accessmultispecialty.com/pricing.html"
+        line1 = f"If you have questions regarding your bill, please contact us at {self.clinic['phone']}."
+        line2 = f"For current pricing, please visit: {self.clinic['pricing_page_url']}"
 
         page_width = letter[0]
 
@@ -726,7 +730,7 @@ class PatientInvoiceGenerator:
                 try:
                     output_path.unlink()
                 except OSError as e:
-                    self.logger.warning(f"Could not delete existing file {output_path}: {e}")
+                    self.logger.warning(f"Could not delete existing cover letter file: {e}")
                     # Try alternative filename
                     counter = 1
                     while True:
@@ -800,7 +804,7 @@ class PatientInvoiceGenerator:
                     paragraph.add_run(text)
 
             doc.save(str(output_path))
-            self.logger.info(f"Generated cover letter: {output_path}")
+            self.logger.info("Generated cover letter")  # path omitted: contains patient name
 
         except Exception as e:
             self.logger.error(f"Error generating cover letter: {e}")
@@ -847,10 +851,8 @@ class PatientInvoiceGenerator:
             )
 
             # Return Address (very compact, top-left)
-            story.append(Paragraph("<b>Access Multi-Specialty</b>", return_address_bold_style))
-            story.append(Paragraph("<b>Medical Clinic, Inc.</b>", return_address_bold_style))
-            story.append(Paragraph("PO Box 351", return_address_style))
-            story.append(Paragraph("Burlingame, CA 94011", return_address_style))
+            story.append(Paragraph(f"<b>{self.clinic['clinic_name']}</b>", return_address_bold_style))
+            story.append(Paragraph(self.clinic['mailing_address'], return_address_style))
 
             story.append(Spacer(1, 1 * inch))
 
@@ -871,7 +873,7 @@ class PatientInvoiceGenerator:
             story.append(Paragraph(city_state_zip, delivery_address_style))
 
             doc.build(story)
-            self.logger.info(f"Generated Com-10 envelope PDF: {output_path}")
+            self.logger.info("Generated Com-10 envelope PDF")  # path omitted: contains patient name
 
         except Exception as e:
             self.logger.error(f"Error generating envelope PDF: {e}")
@@ -909,7 +911,7 @@ class PatientInvoiceGenerator:
 
             df = pd.DataFrame(csv_data)
             df.to_csv(output_path, index=False)
-            self.logger.info(f"Generated CSV export: {output_path}")
+            self.logger.info("Generated CSV export")  # path omitted: contains patient name
 
         except Exception as e:
             self.logger.error(f"Error generating CSV export: {e}")
@@ -1016,19 +1018,19 @@ class PatientInvoiceGenerator:
                     patient, is_ambiguous = self._match_patient(patient_name, patients)
 
                     if is_ambiguous:
-                        self.logger.warning(f"Ambiguous match for patient: {patient_name}")
+                        self.logger.warning("Ambiguous roster match for a patient")
 
                     # Generate invoice lines
                     lines, total_due, original_df = self._generate_invoice_lines(patient_df)
 
                     if total_due < 0:
                         reason = "Credit balance (overpaid)"
-                        self.logger.info(f"{reason} for {patient_name}, skipping")
+                        self.logger.info(f"{reason}, skipping a patient")
                         summary.skipped_patients.append((patient_name, reason))
                         summary.total_skipped += 1
                         continue
                     elif total_due == 0:
-                        self.logger.info(f"Zero balance for {patient_name}, generating invoice to show paid in full")
+                        self.logger.info("Zero balance for a patient, generating invoice to show paid in full")
                         summary.zero_balance_count = getattr(summary, 'zero_balance_count', 0) + 1
 
                     # Create patient folder and use matched patient data for naming
@@ -1080,7 +1082,7 @@ class PatientInvoiceGenerator:
 
                 except Exception as e:
                     error_msg = str(e)
-                    self.logger.error(f"Error processing patient {patient_name}: {error_msg}")
+                    self.logger.error(f"Error processing a patient: {error_msg}")
                     summary.errors.append((patient_name, error_msg))
                     summary.total_errors += 1
                     continue
