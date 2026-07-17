@@ -53,11 +53,11 @@ CONFIG = {
 
     "font_family": "Arial",
     # Pixel targets (per on-screen review): A=105, B=64, C=225, D=140, E=140.
-    # Converted via Excel's standard width<->pixel formula, width = (px-5)/7
-    # (B's 8.43 matches Excel's well-known canonical default exactly, which
-    # validates the formula). D/E are equal so the payment-notice box has
-    # enough room for its text to wrap the same way it was authored.
-    "col_widths": {"A": 14.29, "B": 8.43, "C": 31.43, "D": 19.29, "E": 19.29},
+    # Converted via width = pixels / 7, confirmed against measured on-screen
+    # widths (an earlier width = (px-5)/7 guess rendered 5px short on every
+    # single column). D/E are equal so the payment-notice box has enough
+    # room for its text to wrap the same way it was authored.
+    "col_widths": {"A": 15.0, "B": 9.14, "C": 32.14, "D": 20.0, "E": 20.0},
     "header_fill_color": "D9D9D9",
 
     "margins": dict(left=0.65, right=0.65, top=0.4, bottom=0.6, header=0.2, footer=0.2),
