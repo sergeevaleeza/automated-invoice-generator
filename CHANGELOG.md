@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased] — Phase 1 item 4: Enhanced batch summary (2026-07-16)
+
+### Added
+
+#### 1. Structured per-patient records replace the plain-string summary list
+- `invoice_models.py`: added `ProcessedPatientRecord` (display_name, service_date_start/end, amount_due, amount_paid). `ProcessingSummary.processed_patients: List[str]` is replaced with `processed_records: List[ProcessedPatientRecord]` — the old field held pre-formatted strings like `"Name - Due: $X, Paid: $Y"`, which couldn't carry the service-date range the spec asked for without fragile string parsing. Also added `total_amount_paid: float` (the existing `total_amount_due` is now documented as "total outstanding").
+- `generate_invoices()` populates each record from data it already computes per patient — the service-date range reuses the same `_service_date_range()` helper added for duplicate detection, so nothing is duplicated.
+
+#### 2. `Processing_Summary_*.txt` extended with financial totals, service dates, and validation warnings
+- `_generate_summary_report()` is split into `_generate_summary_report_text()` (pure text, mirrors the `_generate_validation_report_text()` pattern from Phase 1 item 2) and a thin file-writing wrapper — so the exact same content can be shown in the UI, not just written to disk.
+- New "Total Invoiced (billed this period)" (`total_amount_due + total_amount_paid`), "Total Outstanding (amount due)", and "Total Already Paid" lines. Per-patient lines now show the service-date range (e.g. "01/05/2026 to 02/10/2026") alongside due/paid amounts.
+- `generate_invoices()` gained an optional `validation_report` parameter — when the caller already ran `validate_before_generation()` (as `invoice_app.py` always does now, gated behind the review checkbox), its warnings are appended to the summary under a new "VALIDATION WARNINGS" section, giving one combined report instead of two separate ones. Purely informational — doesn't change what gets generated.
+- Skipped-patient reasons were already tracked per-patient (`skipped_patients: List[Tuple[str, str]]`) and needed no changes — currently the only reason that occurs is "Skipped by user (duplicate invoice)" from Phase 1 item 3; earlier-considered reasons like "credit balance" or "filtered insurance" don't apply since credit-balance patients are invoiced (not skipped, per the correction two entries back) and no insurance-filtering feature exists in this codebase.
+
+#### 3. Same summary rendered in the UI after a run
+- `invoice_app.py`: the post-generation results section now shows the financial breakdown as three additional metrics (Total Invoiced / Outstanding / Already Paid), lists processed patients with their service-date range, and adds a "📋 Full Summary Report" expander showing the identical text that gets written to `Processing_Summary_*.txt` (via `st.code`), plus a standalone download button for it.
+- Added `tests/test_summary_report.py` (5 tests): structured record fields are populated correctly, the three financial totals reconcile, the text report contains the expected service-date and totals lines, validation warnings are included when a report is passed, and the file actually gets written to `output_dir`. Full suite (37/37) and the PDF/Excel/both regression pipeline (re-checked with the scratch test script updated for the renamed field) confirmed unaffected otherwise.
+
 ## [Unreleased] — Phase 1 item 3: Duplicate invoice protection (2026-07-16)
 
 ### Added

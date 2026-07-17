@@ -348,40 +348,69 @@ with tab3:
                         generate_csv=generate_csv,
                         export_format=export_format,
                         skip_patient_names=skip_patient_names,
+                        validation_report=validation_report,
                     )
-                    
+
                     # Display results
                     st.success("✅ Invoice generation completed!")
-                    
-                    # Show summary
-                    col1, col2, col3, col4 = st.columns(4)
+
+                    # Show summary — counts, then the financial breakdown
+                    col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Processed", summary.total_processed)
                     with col2:
                         st.metric("Skipped", summary.total_skipped)
                     with col3:
                         st.metric("Errors", summary.total_errors)
+
+                    total_invoiced = summary.total_amount_due + summary.total_amount_paid
+                    col4, col5, col6 = st.columns(3)
                     with col4:
-                        st.metric("Total Amount Due", f"${summary.total_amount_due:.2f}")
-                    
-                    # Show processed patients
-                    if summary.processed_patients:
+                        st.metric("Total Invoiced", f"${total_invoiced:.2f}")
+                    with col5:
+                        st.metric("Total Outstanding", f"${summary.total_amount_due:.2f}")
+                    with col6:
+                        st.metric("Total Already Paid", f"${summary.total_amount_paid:.2f}")
+
+                    # Show processed patients (name, service-date range, amount due)
+                    if summary.processed_records:
                         st.subheader("Successfully Processed Patients")
-                        for patient in summary.processed_patients:
-                            st.write(f"✅ {patient}")
-                    
+                        for record in summary.processed_records:
+                            if record.service_date_start and record.service_date_end:
+                                date_range = (
+                                    record.service_date_start if record.service_date_start == record.service_date_end
+                                    else f"{record.service_date_start} to {record.service_date_end}"
+                                )
+                            else:
+                                date_range = "no service dates"
+                            st.write(
+                                f"✅ {record.display_name} — {date_range} — "
+                                f"Due: ${record.amount_due:.2f}, Paid: ${record.amount_paid:.2f}"
+                            )
+
                     # Show skipped patients
                     if summary.skipped_patients:
                         st.subheader("Skipped Patients")
                         for patient, reason in summary.skipped_patients:
                             st.write(f"⏭️ {patient} - {reason}")
-                    
+
                     # Show errors
                     if summary.errors:
                         st.subheader("Errors")
                         for patient, error in summary.errors:
                             st.write(f"❌ {patient} - {error}")
-                    
+
+                    # Full text report — same content as Processing_Summary_*.txt
+                    summary_text = generator._generate_summary_report_text(summary, validation_report=validation_report)
+                    with st.expander("📋 Full Summary Report"):
+                        st.code(summary_text, language=None)
+                    st.download_button(
+                        "📄 Download Summary Report (.txt)",
+                        data=summary_text,
+                        file_name=f"Processing_Summary_{statement_date.strftime('%Y%m%d')}_preview.txt",
+                        mime="text/plain",
+                    )
+
                     # Create downloadable zip file
                     if output_dir.exists():
                         zip_buffer = io.BytesIO()

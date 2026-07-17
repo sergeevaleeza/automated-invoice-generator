@@ -59,7 +59,7 @@ def test_pure_credit_balance_is_invoiced_not_skipped(generator, minimal_template
     assert summary.total_skipped == 0
     assert summary.skipped_patients == []
     assert summary.total_processed == 1
-    assert "Due: $0.00" in summary.processed_patients[0]
+    assert summary.processed_records[0].amount_due == 0.0
     assert (tmp_path / "output" / "Patient_Credit_1").exists()
 
 
@@ -96,7 +96,7 @@ def test_negative_previous_balance_offset_by_charges(generator, minimal_template
     assert summary.total_skipped == 0
     assert summary.total_processed == 1
     # net = 300 (copay) - 50 (previous credit) - 0 (paid) = 250
-    assert "Due: $250.00" in summary.processed_patients[0]
+    assert summary.processed_records[0].amount_due == 250.0
 
 
 def test_validation_flags_credit_without_implying_skip(generator, tmp_path):

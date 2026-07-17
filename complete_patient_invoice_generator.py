@@ -29,7 +29,7 @@ from docx import Document
 
 # Shared data structures + formatting helpers (also used by excel_invoice_generator.py)
 from invoice_models import (
-    PatientData, InvoiceLine, ProcessingSummary, format_date_for_display,
+    PatientData, InvoiceLine, ProcessingSummary, ProcessedPatientRecord, format_date_for_display,
     REQUIRED_TEMPLATE_PLACEHOLDERS, ValidationIssue, ValidationReport, VALIDATION_CATEGORIES,
 )
 from clinic_config import load_clinic_config
@@ -937,61 +937,90 @@ class PatientInvoiceGenerator:
             self.logger.error(f"Error generating CSV export: {e}")
             raise
 
-    def _generate_summary_report(self, summary: ProcessingSummary, output_dir: Path):
-        """Generate comprehensive summary report"""
+    def _generate_summary_report_text(self, summary: ProcessingSummary,
+                                       validation_report: Optional[ValidationReport] = None) -> str:
+        """Render a ProcessingSummary (plus an optional pre-flight
+        ValidationReport) as plain text — the same content written to
+        Processing_Summary_*.txt and shown in the UI after a run."""
+        lines = []
+        lines.append("=" * 80)
+        lines.append("PATIENT INVOICE PROCESSING SUMMARY")
+        lines.append("=" * 80)
+        lines.append("")
+
+        lines.append(f"Processing Date: {summary.processing_date}")
+        lines.append(f"Statement Date: {self.statement_date.strftime('%B %d, %Y')}")
+        lines.append(f"Payment Due Date: {self.payment_due_date.strftime('%B %d, %Y')}")
+        lines.append(f"Amount Due Strategy: {self.amount_due_strategy}")
+        lines.append("")
+
+        total_invoiced = summary.total_amount_due + summary.total_amount_paid
+        lines.append("SUMMARY STATISTICS:")
+        lines.append("-" * 40)
+        lines.append(f"Total Patients Processed: {summary.total_processed}")
+        lines.append(f"Total Patients Skipped: {summary.total_skipped}")
+        lines.append(f"Total Errors: {summary.total_errors}")
+        lines.append(f"Total Invoiced (billed this period): ${total_invoiced:.2f}")
+        lines.append(f"Total Outstanding (amount due): ${summary.total_amount_due:.2f}")
+        lines.append(f"Total Already Paid: ${summary.total_amount_paid:.2f}")
+        lines.append("")
+
+        if summary.processed_records:
+            lines.append("SUCCESSFULLY PROCESSED PATIENTS:")
+            lines.append("-" * 40)
+            for i, record in enumerate(summary.processed_records, 1):
+                if record.service_date_start and record.service_date_end:
+                    start = format_date_for_display(record.service_date_start)
+                    end = format_date_for_display(record.service_date_end)
+                    date_range = f"{start} to {end}" if start != end else start
+                else:
+                    date_range = "no service dates"
+                lines.append(f"{i:3d}. {record.display_name} — Service dates: {date_range} — "
+                              f"Due: ${record.amount_due:.2f}, Paid: ${record.amount_paid:.2f}")
+            lines.append("")
+
+        if summary.skipped_patients:
+            lines.append("SKIPPED PATIENTS:")
+            lines.append("-" * 40)
+            for i, (patient, reason) in enumerate(summary.skipped_patients, 1):
+                lines.append(f"{i:3d}. {patient} - {reason}")
+            lines.append("")
+
+        if summary.errors:
+            lines.append("ERRORS ENCOUNTERED:")
+            lines.append("-" * 40)
+            for i, (patient, error) in enumerate(summary.errors, 1):
+                lines.append(f"{i:3d}. {patient} - {error}")
+            lines.append("")
+
+        if validation_report is not None and validation_report.issues:
+            lines.append(f"VALIDATION WARNINGS (from pre-flight scan, {validation_report.generated_at}):")
+            lines.append("-" * 40)
+            for i, issue in enumerate(validation_report.issues, 1):
+                lines.append(f"{i:3d}. [{issue.severity.upper()}] {issue.patient_name} — "
+                              f"{VALIDATION_CATEGORIES.get(issue.category, issue.category)}: {issue.detail}")
+            lines.append("")
+
+        lines.append("FILES GENERATED:")
+        lines.append("-" * 40)
+        lines.append("For each processed patient:")
+        lines.append("  - PDF and/or Excel Invoice: LastName_Year_Invoice_mmddyyyy.pdf/.xlsx")
+        lines.append("  - Cover Letter: LastName_Envelope.docx")
+        lines.append("  - CSV Items: LastName_Year_InvoiceItems_mmddyyyy.csv")
+        lines.append("")
+
+        lines.append("=" * 80)
+        lines.append("End of Summary Report")
+        lines.append("=" * 80)
+        return "\n".join(lines)
+
+    def _generate_summary_report(self, summary: ProcessingSummary, output_dir: Path,
+                                  validation_report: Optional[ValidationReport] = None):
+        """Write the batch summary report to Processing_Summary_*.txt."""
         try:
             summary_path = output_dir / f"Processing_Summary_{self.statement_date.strftime('%Y%m%d')}.txt"
-
-            with open(summary_path, 'w') as f:
-                f.write("=" * 80 + "\n")
-                f.write("PATIENT INVOICE PROCESSING SUMMARY\n")
-                f.write("=" * 80 + "\n\n")
-
-                f.write(f"Processing Date: {summary.processing_date}\n")
-                f.write(f"Statement Date: {self.statement_date.strftime('%B %d, %Y')}\n")
-                f.write(f"Payment Due Date: {self.payment_due_date.strftime('%B %d, %Y')}\n")
-                f.write(f"Amount Due Strategy: {self.amount_due_strategy}\n\n")
-
-                f.write("SUMMARY STATISTICS:\n")
-                f.write("-" * 40 + "\n")
-                f.write(f"Total Patients Processed: {summary.total_processed}\n")
-                f.write(f"Total Patients Skipped: {summary.total_skipped}\n")
-                f.write(f"Total Errors: {summary.total_errors}\n")
-                f.write(f"Total Amount Due: ${summary.total_amount_due:.2f}\n\n")
-
-                if summary.processed_patients:
-                    f.write("SUCCESSFULLY PROCESSED PATIENTS:\n")
-                    f.write("-" * 40 + "\n")
-                    for i, patient in enumerate(summary.processed_patients, 1):
-                        f.write(f"{i:3d}. {patient}\n")
-                    f.write("\n")
-
-                if summary.skipped_patients:
-                    f.write("SKIPPED PATIENTS:\n")
-                    f.write("-" * 40 + "\n")
-                    for i, (patient, reason) in enumerate(summary.skipped_patients, 1):
-                        f.write(f"{i:3d}. {patient} - {reason}\n")
-                    f.write("\n")
-
-                if summary.errors:
-                    f.write("ERRORS ENCOUNTERED:\n")
-                    f.write("-" * 40 + "\n")
-                    for i, (patient, error) in enumerate(summary.errors, 1):
-                        f.write(f"{i:3d}. {patient} - {error}\n")
-                    f.write("\n")
-
-                f.write("FILES GENERATED:\n")
-                f.write("-" * 40 + "\n")
-                f.write("For each processed patient:\n")
-                f.write("  - PDF Invoice: LastName_Year_Invoice_mmddyyyy.pdf\n")
-                f.write("  - Cover Letter: LastName_Envelope.docx\n")
-                f.write("  - CSV Items: LastName_Year_InvoiceItems_mmddyyyy.csv\n\n")
-
-                f.write("=" * 80 + "\n")
-                f.write("End of Summary Report\n")
-                f.write("=" * 80 + "\n")
-
-            self.logger.info(f"Generated summary report: {summary_path}")
+            summary_path.write_text(self._generate_summary_report_text(summary, validation_report))
+            self.logger.info("Generated summary report")  # path omitted: filename embeds the statement date, not a patient name, but kept generic for consistency
 
         except Exception as e:
             self.logger.error(f"Error generating summary report: {e}")
@@ -1179,7 +1208,8 @@ class PatientInvoiceGenerator:
                           custom_mapping: Dict = None, generate_csv: bool = True,
                           envelope_format: str = "docx", export_format: str = "pdf",
                           skip_patient_names: Optional[Set[str]] = None,
-                          run_history_db_path: Optional[Path] = None):
+                          run_history_db_path: Optional[Path] = None,
+                          validation_report: Optional[ValidationReport] = None):
         """Main method to generate all invoices and cover letters.
 
         export_format: "pdf", "excel", or "both" — controls which invoice
@@ -1187,6 +1217,10 @@ class PatientInvoiceGenerator:
         skip_patient_names: raw invoice-sheet names (matching the 'name'
         column's groupby keys) to skip entirely — e.g. patients the user
         chose not to regenerate after a duplicate-invoice warning.
+        validation_report: the pre-flight ValidationReport for this same
+        roster/invoice pair, if the caller already ran one — included in
+        the batch summary (file + UI) for a single combined view. Purely
+        informational here; doesn't affect what gets generated.
         """
         generate_pdf_invoice = export_format in ("pdf", "both")
         generate_excel_invoice_file = export_format in ("excel", "both")
@@ -1194,13 +1228,14 @@ class PatientInvoiceGenerator:
         db_path = run_history_db_path or run_history.DEFAULT_DB_PATH
         # Initialize summary tracking
         summary = ProcessingSummary(
-            processed_patients=[],
+            processed_records=[],
             skipped_patients=[],
             errors=[],
             total_processed=0,
             total_skipped=0,
             total_errors=0,
             total_amount_due=0.0,
+            total_amount_paid=0.0,
             processing_date=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         )
 
@@ -1290,14 +1325,21 @@ class PatientInvoiceGenerator:
 
                     # Update summary
                     total_payments = float(original_df['paid'].sum())
-                    summary.processed_patients.append(f"{patient_display_name} - Due: ${total_due:.2f}, Paid: ${total_payments:.2f}")
+                    date_range = self._service_date_range(original_df)
+                    service_start, service_end = date_range if date_range else (None, None)
+                    summary.processed_records.append(ProcessedPatientRecord(
+                        display_name=patient_display_name,
+                        service_date_start=service_start,
+                        service_date_end=service_end,
+                        amount_due=total_due,
+                        amount_paid=total_payments,
+                    ))
                     summary.total_processed += 1
                     summary.total_amount_due += total_due
+                    summary.total_amount_paid += total_payments
 
                     # Record this run for future duplicate-invoice checks
-                    date_range = self._service_date_range(original_df)
                     if date_range is not None:
-                        service_start, service_end = date_range
                         key = run_history.patient_key(file_patient.prn, file_patient.first_name, file_patient.last_name)
                         generated_filenames = [p.name for p in (
                             pdf_path if generate_pdf_invoice else None,
@@ -1319,7 +1361,7 @@ class PatientInvoiceGenerator:
                     continue
 
             # Generate summary report
-            self._generate_summary_report(summary, output_path)
+            self._generate_summary_report(summary, output_path, validation_report=validation_report)
 
             self.logger.info(f"Processing complete. Generated: {summary.total_processed}, "
                              f"Skipped: {summary.total_skipped}, Errors: {summary.total_errors}")

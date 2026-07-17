@@ -47,15 +47,26 @@ class InvoiceLine:
 
 
 @dataclass
+class ProcessedPatientRecord:
+    """One successfully-generated invoice, for the batch summary report."""
+    display_name: str
+    service_date_start: Optional[str]  # ISO 'YYYY-MM-DD', or None if unparseable
+    service_date_end: Optional[str]
+    amount_due: float
+    amount_paid: float
+
+
+@dataclass
 class ProcessingSummary:
     """Summary of processing results"""
-    processed_patients: List[str]
+    processed_records: List[ProcessedPatientRecord]
     skipped_patients: List[Tuple[str, str]]  # (name, reason)
     errors: List[Tuple[str, str]]  # (patient_name, error)
     total_processed: int
     total_skipped: int
     total_errors: int
-    total_amount_due: float
+    total_amount_due: float  # total outstanding across processed patients
+    total_amount_paid: float  # total already collected this period
     processing_date: str
 
 
