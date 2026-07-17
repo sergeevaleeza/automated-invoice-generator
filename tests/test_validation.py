@@ -81,9 +81,12 @@ def roster_and_invoice(tmp_path):
     return str(roster_path), str(invoice_path)
 
 
-def test_validation_finds_all_issue_categories(generator, roster_and_invoice):
+def test_validation_finds_all_issue_categories(generator, roster_and_invoice, tmp_path):
     roster_path, invoice_path = roster_and_invoice
-    report = generator.validate_before_generation(roster_file=roster_path, invoice_file=invoice_path)
+    report = generator.validate_before_generation(
+        roster_file=roster_path, invoice_file=invoice_path,
+        run_history_db_path=tmp_path / "run_history.db",
+    )
 
     categories_found = {issue.category for issue in report.issues}
     assert categories_found == {
@@ -93,9 +96,12 @@ def test_validation_finds_all_issue_categories(generator, roster_and_invoice):
     }
 
 
-def test_validation_counts_and_severities(generator, roster_and_invoice):
+def test_validation_counts_and_severities(generator, roster_and_invoice, tmp_path):
     roster_path, invoice_path = roster_and_invoice
-    report = generator.validate_before_generation(roster_file=roster_path, invoice_file=invoice_path)
+    report = generator.validate_before_generation(
+        roster_file=roster_path, invoice_file=invoice_path,
+        run_history_db_path=tmp_path / "run_history.db",
+    )
 
     assert report.total_patient_groups == 6
     # unmatched_patient and missing_service_date are errors; the rest are warnings
@@ -122,15 +128,21 @@ def test_clean_data_produces_no_issues(generator, tmp_path):
     invoice_path = tmp_path / "invoice.xlsx"
     pd.DataFrame(invoice_rows).to_excel(invoice_path, sheet_name="Sheet1", index=False)
 
-    report = generator.validate_before_generation(roster_file=str(roster_path), invoice_file=str(invoice_path))
+    report = generator.validate_before_generation(
+        roster_file=str(roster_path), invoice_file=str(invoice_path),
+        run_history_db_path=tmp_path / "run_history.db",
+    )
     assert report.issues == []
     assert report.error_count == 0
     assert report.warning_count == 0
 
 
-def test_validation_report_text_export(generator, roster_and_invoice):
+def test_validation_report_text_export(generator, roster_and_invoice, tmp_path):
     roster_path, invoice_path = roster_and_invoice
-    report = generator.validate_before_generation(roster_file=roster_path, invoice_file=invoice_path)
+    report = generator.validate_before_generation(
+        roster_file=roster_path, invoice_file=invoice_path,
+        run_history_db_path=tmp_path / "run_history.db",
+    )
     text = PatientInvoiceGenerator._generate_validation_report_text(report)
 
     assert "PRE-FLIGHT VALIDATION REPORT" in text

@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased] — Phase 1 item 3: Duplicate invoice protection (2026-07-16)
+
+### Added
+
+#### 1. Local SQLite run-history store
+- Added `run_history.py`: a small SQLite-backed store (`data/run_history.db`, gitignored — operational data about real patients) recording, per successfully-generated invoice, the patient's identity, service-date range, statement (invoice) date, and output filenames. `patient_key(prn, first_name, last_name)` prefers PRN (stable across differently-formatted invoice workbooks) and falls back to a normalized name for unmatched patients. `find_overlapping_runs()` does a standard inclusive date-range overlap query; `record_invoice_run()` inserts a new record.
+- Caveat noted in the module docstring and the UI: this is a local file — it will **not** persist across a Streamlit Cloud redeploy, only within one running container's lifetime.
+
+#### 2. Duplicate-invoice detection wired into pre-flight validation
+- `validate_before_generation()` now also flags a `duplicate_invoice` category: for each patient group, computes the service-date range (`_service_date_range()`, new helper — earliest/latest parseable `visit_date`) and checks `run_history` for an overlapping prior run, producing messages in the exact format originally requested: "Already invoiced for 01/12 to 04/30 on 2026-06-15." (ISO dates; the UI shows the patient name alongside).
+- `invoice_app.py`: duplicate-invoice issues render as per-patient checkboxes ("Skip **Name** — already invoiced...") instead of plain text, checked (skip) by default, in their own section of the Pre-Flight Validation panel.
+
+#### 3. `generate_invoices()` respects skip choices and records successful runs
+- New `skip_patient_names` parameter: patients named here are skipped entirely (added to `skipped_patients` with reason "Skipped by user (duplicate invoice)"), never generated, never recorded to `run_history`. `invoice_app.py` collects this set from the checkbox states of whatever duplicate issues the current validation report found, and passes it through when "Generate All Reports" runs.
+- Every patient that's actually generated (not skipped, no error) gets recorded to `run_history` afterward — service-date range, the statement date used, and the filenames actually written (only the formats that were actually generated, e.g. no `.xlsx` entry when `export_format="pdf"`).
+- Added `tests/test_run_history.py` (12 tests: patient_key derivation, overlap boundary cases, cross-patient isolation, most-recent-first ordering) and `tests/test_duplicate_detection.py` (4 integration tests: no false positive on a first run, a second batch is correctly flagged after the first run recorded history, `skip_patient_names` excludes generation and doesn't record a phantom run, and a later *non-overlapping* service period for the same patient is correctly not flagged).
+- Found and fixed a test-isolation bug while building this: two `generate_invoices()` calls in `tests/test_credit_balance.py` (from the previous entry) didn't pass `run_history_db_path`, so they wrote to the real `data/run_history.db` — causing a later, unrelated validation test to fail against polluted state. Fixed by threading an explicit `tmp_path`-based DB through every test that touches run history (in that file and `tests/test_validation.py`), and deleted the accidentally-created `data/run_history.db` (gitignored, contained only test artifacts). Full suite (32/32) confirmed clean of any default-path usage after the fix.
+
 ## [Unreleased] — Correction: don't skip overpaid patients after all (2026-07-16)
 
 ### Changed

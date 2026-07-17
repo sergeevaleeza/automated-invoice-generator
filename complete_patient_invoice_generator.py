@@ -10,7 +10,7 @@ from pathlib import Path
 import json
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Set
 import logging
 import os
 from difflib import SequenceMatcher
@@ -33,6 +33,7 @@ from invoice_models import (
     REQUIRED_TEMPLATE_PLACEHOLDERS, ValidationIssue, ValidationReport, VALIDATION_CATEGORIES,
 )
 from clinic_config import load_clinic_config
+import run_history
 
 # Excel invoice generation (mirrors the PDF layout, no shared business logic)
 from excel_invoice_generator import generate_excel_invoice
@@ -1012,8 +1013,19 @@ class PatientInvoiceGenerator:
             return f"Postal code '{postal}' doesn't look like a valid US ZIP"
         return None
 
+    @staticmethod
+    def _service_date_range(patient_df: pd.DataFrame) -> Optional[Tuple[str, str]]:
+        """Earliest/latest parseable visit_date in a patient's rows, as ISO
+        'YYYY-MM-DD' strings — the range used for duplicate-invoice overlap
+        checks. None if no row has a parseable date."""
+        parsed = pd.to_datetime(patient_df['visit_date'], errors='coerce').dropna()
+        if parsed.empty:
+            return None
+        return parsed.min().strftime('%Y-%m-%d'), parsed.max().strftime('%Y-%m-%d')
+
     def validate_before_generation(self, roster_file: str, invoice_file: str,
-                                    custom_mapping: Dict = None) -> ValidationReport:
+                                    custom_mapping: Dict = None,
+                                    run_history_db_path: Optional[Path] = None) -> ValidationReport:
         """Read-only pre-flight scan over the roster + invoice workbook —
         generates no files. Reuses load_patient_roster()/load_invoice_data()/
         _match_patient()/_generate_invoice_lines() so matching, parsing, and
@@ -1022,11 +1034,14 @@ class PatientInvoiceGenerator:
 
         Checks: patients missing from the roster or matched with low
         confidence, missing/malformed addresses, missing service dates,
-        charges with no service description, and negative (credit)
-        balances — these patients are still invoiced, not skipped, but
-        it's useful to see who has a credit before generating.
+        charges with no service description, negative (credit) balances
+        — these patients are still invoiced, not skipped, but it's useful
+        to see who has a credit before generating — and possible
+        duplicates (an overlapping service-date range already recorded in
+        run_history for the same patient).
         """
         issues: List[ValidationIssue] = []
+        db_path = run_history_db_path or run_history.DEFAULT_DB_PATH
 
         patients = self.load_patient_roster(roster_file)
         invoice_df = self.load_invoice_data(invoice_file, custom_mapping)
@@ -1099,6 +1114,24 @@ class PatientInvoiceGenerator:
                            f"and $0.00 due.",
                 ))
 
+            date_range = self._service_date_range(patient_df)
+            if date_range is not None:
+                service_start, service_end = date_range
+                if patient is not None:
+                    key = run_history.patient_key(patient.prn, patient.first_name, patient.last_name)
+                else:
+                    first_name, last_name = self._parse_patient_name(patient_name)
+                    key = run_history.patient_key(None, first_name, last_name)
+                overlaps = run_history.find_overlapping_runs(key, service_start, service_end, db_path=db_path)
+                if overlaps:
+                    most_recent = overlaps[0]
+                    issues.append(ValidationIssue(
+                        category="duplicate_invoice", severity="warning",
+                        patient_name=patient_name,
+                        detail=f"Already invoiced for {most_recent.service_date_start} to "
+                               f"{most_recent.service_date_end} on {most_recent.invoice_date}.",
+                    ))
+
         return ValidationReport(
             issues=issues,
             total_patient_groups=len(patient_groups),
@@ -1144,14 +1177,21 @@ class PatientInvoiceGenerator:
     def generate_invoices(self, roster_file: str, invoice_file: str,
                           template_file: str, output_dir: str = "output",
                           custom_mapping: Dict = None, generate_csv: bool = True,
-                          envelope_format: str = "docx", export_format: str = "pdf"):
+                          envelope_format: str = "docx", export_format: str = "pdf",
+                          skip_patient_names: Optional[Set[str]] = None,
+                          run_history_db_path: Optional[Path] = None):
         """Main method to generate all invoices and cover letters.
 
         export_format: "pdf", "excel", or "both" — controls which invoice
         file format(s) are written per patient.
+        skip_patient_names: raw invoice-sheet names (matching the 'name'
+        column's groupby keys) to skip entirely — e.g. patients the user
+        chose not to regenerate after a duplicate-invoice warning.
         """
         generate_pdf_invoice = export_format in ("pdf", "both")
         generate_excel_invoice_file = export_format in ("excel", "both")
+        skip_patient_names = skip_patient_names or set()
+        db_path = run_history_db_path or run_history.DEFAULT_DB_PATH
         # Initialize summary tracking
         summary = ProcessingSummary(
             processed_patients=[],
@@ -1178,6 +1218,13 @@ class PatientInvoiceGenerator:
 
             for patient_name, patient_df in patient_groups:
                 try:
+                    if patient_name in skip_patient_names:
+                        reason = "Skipped by user (duplicate invoice)"
+                        self.logger.info(f"{reason}, skipping a patient")
+                        summary.skipped_patients.append((patient_name, reason))
+                        summary.total_skipped += 1
+                        continue
+
                     # Match patient
                     patient, is_ambiguous, _match_score = self._match_patient(patient_name, patients)
 
@@ -1246,6 +1293,23 @@ class PatientInvoiceGenerator:
                     summary.processed_patients.append(f"{patient_display_name} - Due: ${total_due:.2f}, Paid: ${total_payments:.2f}")
                     summary.total_processed += 1
                     summary.total_amount_due += total_due
+
+                    # Record this run for future duplicate-invoice checks
+                    date_range = self._service_date_range(original_df)
+                    if date_range is not None:
+                        service_start, service_end = date_range
+                        key = run_history.patient_key(file_patient.prn, file_patient.first_name, file_patient.last_name)
+                        generated_filenames = [p.name for p in (
+                            pdf_path if generate_pdf_invoice else None,
+                            xlsx_path if generate_excel_invoice_file else None,
+                            envelope_docx_path,
+                            csv_path if generate_csv else None,
+                        ) if p is not None]
+                        run_history.record_invoice_run(
+                            key, patient_display_name, service_start, service_end,
+                            self.statement_date.strftime('%Y-%m-%d'), generated_filenames,
+                            db_path=db_path,
+                        )
 
                 except Exception as e:
                     error_msg = str(e)

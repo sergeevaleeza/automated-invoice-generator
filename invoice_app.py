@@ -193,7 +193,9 @@ with tab3:
     st.caption(
         "Scans the roster and invoice data for issues — unmatched or low-confidence "
         "patient matches, missing/malformed addresses, missing service dates, charges "
-        "with no description, and credit balances — before anything is generated."
+        "with no description, credit balances, and possible duplicate invoices (an "
+        "overlapping service-date range already invoiced) — before anything is generated. "
+        "Duplicate history is a local file and won't survive a Streamlit Cloud redeploy."
     )
 
     # Custom mapping is defined in tab2 but used here and by validation below.
@@ -253,9 +255,21 @@ with tab3:
                 if not category_issues:
                     continue
                 with st.expander(f"{label} ({len(category_issues)})"):
-                    for issue in category_issues:
-                        icon = "🛑" if issue.severity == "error" else "⚠️"
-                        st.write(f"{icon} **{issue.patient_name}** — {issue.detail}")
+                    if category == "duplicate_invoice":
+                        st.caption(
+                            "Checked = skip this patient in the run below. Uncheck to "
+                            "regenerate anyway (e.g. a legitimate correction/reprint)."
+                        )
+                        for issue in category_issues:
+                            st.checkbox(
+                                f"Skip **{issue.patient_name}** — {issue.detail}",
+                                value=True,
+                                key=f"dup_skip__{issue.patient_name}",
+                            )
+                    else:
+                        for issue in category_issues:
+                            icon = "🛑" if issue.severity == "error" else "⚠️"
+                            st.write(f"{icon} **{issue.patient_name}** — {issue.detail}")
         else:
             st.success(f"✅ No issues found across {validation_report.total_patient_groups} patient group(s).")
 
@@ -273,6 +287,15 @@ with tab3:
         )
     else:
         st.info("Run validation before generating reports.")
+
+    # Patients whose "Skip" checkbox (rendered above, in the duplicate-invoice
+    # expander) is checked — collected from whatever duplicate issues the
+    # current validation_report actually found.
+    skip_patient_names = set()
+    if validation_report is not None:
+        for issue in validation_report.issues:
+            if issue.category == "duplicate_invoice" and st.session_state.get(f"dup_skip__{issue.patient_name}", True):
+                skip_patient_names.add(issue.patient_name)
 
     generation_blocked = not st.session_state.get("validation_reviewed", False)
     if generation_blocked:
@@ -323,7 +346,8 @@ with tab3:
                         output_dir=str(output_dir),
                         custom_mapping=custom_mapping if custom_mapping else None,
                         generate_csv=generate_csv,
-                        export_format=export_format
+                        export_format=export_format,
+                        skip_patient_names=skip_patient_names,
                     )
                     
                     # Display results

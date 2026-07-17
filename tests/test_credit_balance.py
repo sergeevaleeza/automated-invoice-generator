@@ -54,6 +54,7 @@ def test_pure_credit_balance_is_invoiced_not_skipped(generator, minimal_template
     summary = generator.generate_invoices(
         roster_file=roster_path, invoice_file=invoice_path, template_file=minimal_template,
         output_dir=str(tmp_path / "output"), generate_csv=False, export_format="pdf",
+        run_history_db_path=tmp_path / "run_history.db",
     )
     assert summary.total_skipped == 0
     assert summary.skipped_patients == []
@@ -90,6 +91,7 @@ def test_negative_previous_balance_offset_by_charges(generator, minimal_template
     summary = generator.generate_invoices(
         roster_file=roster_path, invoice_file=invoice_path, template_file=minimal_template,
         output_dir=str(tmp_path / "output"), generate_csv=False, export_format="pdf",
+        run_history_db_path=tmp_path / "run_history.db",
     )
     assert summary.total_skipped == 0
     assert summary.total_processed == 1
@@ -107,7 +109,10 @@ def test_validation_flags_credit_without_implying_skip(generator, tmp_path):
             "Previous Balance": -215.35, "Type Of Service": "Psychotherapy",
         }),
     ])
-    report = generator.validate_before_generation(roster_file=roster_path, invoice_file=invoice_path)
+    db_path = tmp_path / "run_history.db"
+    report = generator.validate_before_generation(
+        roster_file=roster_path, invoice_file=invoice_path, run_history_db_path=db_path,
+    )
     credit_issues = [i for i in report.issues if i.category == "negative_balance"]
     assert len(credit_issues) == 1
     assert "skip" not in credit_issues[0].detail.lower()
@@ -123,5 +128,7 @@ def test_validation_flags_credit_without_implying_skip(generator, tmp_path):
             "Previous Balance": -50, "Type Of Service": "Psychotherapy",
         }),
     ])
-    report2 = generator.validate_before_generation(roster_file=roster_path2, invoice_file=invoice_path2)
+    report2 = generator.validate_before_generation(
+        roster_file=roster_path2, invoice_file=invoice_path2, run_history_db_path=db_path,
+    )
     assert not any(i.category == "negative_balance" for i in report2.issues)

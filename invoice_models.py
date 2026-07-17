@@ -69,6 +69,7 @@ VALIDATION_CATEGORIES = {
     "missing_service_date": "Missing service date",
     "missing_description": "Charge with no service description",
     "negative_balance": "Credit / negative balance",
+    "duplicate_invoice": "Possible duplicate invoice",
 }
 
 
