@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] — Phase 1 item 1 follow-up: Streamlit secrets fallback for clinic config (2026-07-16)
+
+### Fixed
+
+#### 1. clinic_config.json is gitignored, so it never exists on a fresh Streamlit Cloud deploy
+- `clinic_config.py` now resolves clinic identity from either of two sources, in order: (a) `clinic_config.json` if present (local dev), or (b) a `[clinic_config]` table in Streamlit secrets (`st.secrets`) if the file isn't there (cloud deploys). Only raises `ClinicConfigError` if neither source has a complete config — the error message now mentions both options and points to the new `docs/DEPLOY.md`.
+- Centralized in `load_clinic_config()` (unchanged signature/return shape — still a plain dict regardless of source) plus a new `get_clinic_config_source()` for display purposes, both built on a shared internal `_resolve_clinic_config()` so the two can't drift out of sync. Every existing caller (`excel_invoice_generator.py`, `complete_patient_invoice_generator.py`, `invoice_app.py`) already went through `load_clinic_config()`, so no call-site changes were needed beyond `invoice_app.py`'s new status line.
+- `st.secrets` returns `AttrDict`-like objects, not plain dicts — added `_attrdict_to_dict()` to recursively convert (duck-typed on `.items()` rather than importing Streamlit's internal `AttrDict` class, so it's not tied to a specific Streamlit version). Accessing `st.secrets` when no secrets are configured at all raises `StreamlitSecretNotFoundError`; caught broadly and treated as "not available," not an error — only the final "neither source worked" case raises.
+- `invoice_app.py`'s "Generate Reports" tab now shows `Config: local file` or `Config: Streamlit secrets` via `st.caption()` so it's clear at a glance which source is active.
+- Error/validation messages only ever name missing *keys* (e.g. "missing required field(s): npi"), never values, from either source.
+- Added `docs/DEPLOY.md` with the exact `[clinic_config]` TOML block to paste into Streamlit Cloud's Secrets panel (same fields as `clinic_config.example.json`, placeholder values only), plus `.streamlit/secrets.toml` to `.gitignore` for local secrets-path testing.
+- Verified locally: (1) real `clinic_config.json` present → `local file`; (2) file renamed away with a mock `.streamlit/secrets.toml` in place → `Streamlit secrets`, full `generate_invoices()` pipeline confirmed working through this path; (3) both missing → the clear, updated `ClinicConfigError`, surfaced correctly through `invoice_app.py` with no exceptions (checked via `AppTest`). Full pytest suite (8/8) and PDF/Excel/both regression checks unaffected throughout.
+
 ## [Unreleased] — Phase 1 item 1: HIPAA/open-source hygiene sweep (2026-07-16)
 
 ### Security / Findings

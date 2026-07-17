@@ -11,7 +11,7 @@ import os
 # Import your existing class
 from complete_patient_invoice_generator import PatientInvoiceGenerator
 from invoice_models import REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template
-from clinic_config import load_clinic_config, ClinicConfigError
+from clinic_config import get_clinic_config_source, ClinicConfigError
 
 # --- Config: cover letter template path + required placeholders ---
 TEMPLATE_CONFIG = {
@@ -157,7 +157,8 @@ with tab3:
 
     clinic_config_error = None
     try:
-        load_clinic_config()
+        clinic_config_source = get_clinic_config_source()
+        st.caption(f"Config: {clinic_config_source}")
     except ClinicConfigError as e:
         clinic_config_error = str(e)
 
