@@ -482,10 +482,14 @@ class PatientInvoiceGenerator:
                 is_previous_balance=False
             ))
 
-        # Calculate total_due: negative previous_balance acts as a credit, reducing the total
+        # Calculate total_due: negative previous_balance acts as a credit, reducing the total.
+        # Deliberately NOT floored at 0 here — generate_invoices() checks
+        # `total_due < 0` immediately after calling this method and skips
+        # the patient before any generation happens, so a floor here would
+        # (and previously did) make that check permanently unreachable.
         subtotal_copay = float(patient_df['copay'].sum()) + previous_balance
         subtotal_paid = float(patient_df['paid'].sum())
-        total_due = max(0, subtotal_copay - subtotal_paid)
+        total_due = subtotal_copay - subtotal_paid
 
         return lines, total_due, patient_df
 
@@ -1009,15 +1013,14 @@ class PatientInvoiceGenerator:
                                     custom_mapping: Dict = None) -> ValidationReport:
         """Read-only pre-flight scan over the roster + invoice workbook —
         generates no files. Reuses load_patient_roster()/load_invoice_data()/
-        _match_patient() so matching and parsing logic isn't duplicated;
-        this method only adds the read-only inspection pass on top.
+        _match_patient()/_generate_invoice_lines() so matching, parsing, and
+        balance-calculation logic isn't duplicated; this method only adds
+        the read-only inspection pass on top.
 
         Checks: patients missing from the roster or matched with low
         confidence, missing/malformed addresses, missing service dates,
         charges with no service description, and negative (credit)
-        balances that _generate_invoice_lines() will floor to $0 rather
-        than skip (see CHANGELOG — a separate, pre-existing behavior this
-        only surfaces, doesn't change).
+        balances — patients generate_invoices() will skip entirely.
         """
         issues: List[ValidationIssue] = []
 
@@ -1078,14 +1081,16 @@ class PatientInvoiceGenerator:
                         detail=f"Charge/payment on {display_date} has no service description.",
                     ))
 
-            previous_balance = float(patient_df.iloc[0].get('previous_balance', 0))
-            if previous_balance < 0:
+            # Same check generate_invoices() uses to decide whether to skip
+            # this patient entirely — reused directly rather than
+            # recomputed, so validation can never drift from real behavior.
+            _lines, total_due, _df = self._generate_invoice_lines(patient_df)
+            if total_due < 0:
                 issues.append(ValidationIssue(
                     category="negative_balance", severity="warning",
                     patient_name=patient_name,
-                    detail=f"Previous balance is a credit of ${abs(previous_balance):.2f}. "
-                           f"This currently still generates a $0.00 invoice rather than "
-                           f"being skipped (see CHANGELOG for details).",
+                    detail=f"Net balance is a credit of ${abs(total_due):.2f}. "
+                           f"This patient will be skipped entirely during generation.",
                 ))
 
         return ValidationReport(

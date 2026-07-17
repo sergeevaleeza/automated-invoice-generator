@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased] — Fix credit-balance skip logic (2026-07-16)
+
+### Fixed
+
+#### 1. Credit-balance patients are now actually skipped, not $0.00-invoiced
+- Follow-up to the previous entry's "found, not fixed" item: `_generate_invoice_lines()` no longer floors `total_due` at `max(0, ...)` before returning it. That floor made `generate_invoices()`'s `if total_due < 0: skip as credit balance` permanently unreachable — a patient with a negative previous balance and no offsetting charges this period fell through to the zero-balance branch and got a **$0.00 invoice generated** instead of being skipped. The floor is no longer needed: `generate_invoices()` already checks `total_due < 0` and `continue`s immediately after calling `_generate_invoice_lines()`, before any generation happens, so a negative value is never actually used to produce an invoice — it now reaches the (already-correct) skip check instead.
+- `validate_before_generation()`'s `negative_balance` check previously used `previous_balance < 0` alone as a proxy — inaccurate, since same-period charges can bring the net balance back to zero or positive even when the previous balance was a credit. It now calls `_generate_invoice_lines()` directly and checks the real `total_due < 0` condition, so validation can't drift from what generation actually does. Updated the warning text accordingly ("will be skipped entirely" instead of "still generates a $0.00 invoice").
+- Added `tests/test_credit_balance.py` (3 tests): a pure-credit patient is skipped, not zero-invoiced; a negative previous balance fully offset by this period's charges is correctly **not** skipped (the exact case the old proxy check got wrong); and validation agrees with generation in both directions. Full suite (15/15) and PDF/Excel/both regression pipeline confirmed unaffected otherwise.
+
 ## [Unreleased] — Phase 1 item 2: Pre-flight validation report (2026-07-16)
 
 ### Added
