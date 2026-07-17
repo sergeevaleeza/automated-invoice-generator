@@ -14,6 +14,7 @@
   "check_payable_to": "Jane A. Doe, MD",
   "provider_name_for_signature": "Jane A. Doe, MD",
   "show_qr": false,
+  "qr_image_path": "templates/zelle_qr.jpg",
   "qr_content": "https://yourclinic.example.com/pricing.html",
   "default_icd10_codes": ["Z00.00"],
   "default_cpt_by_service_type": {

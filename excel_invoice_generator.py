@@ -24,7 +24,7 @@ from openpyxl.drawing.image import Image as XLImage
 
 from invoice_models import PatientData, InvoiceLine, format_date_for_display
 from clinic_config import load_clinic_config
-from qr_code import generate_qr_png_bytes, qr_settings
+from qr_code import resolve_qr_image_bytes
 
 # --- Static layout config: labels, widths, margins, row heights, fonts ----
 # Clinic identity (name, addresses, EIN/NPI, payment info) is NOT here — it's
@@ -92,8 +92,7 @@ def _clinic_derived_config(clinic: dict) -> dict:
         "signature_label": f"Provider Signature - {clinic['provider_name_for_signature']}",
         "footer_line1": f"If you have questions regarding your bill, please contact us at {clinic['phone']}.",
         "footer_line2": f"For current pricing, please visit: {clinic['pricing_page_url']}",
-        "show_qr": qr_settings(clinic)[0],
-        "qr_content": qr_settings(clinic)[1],
+        "qr_image_bytes": resolve_qr_image_bytes(clinic),
     }
 
 # Matches the fixture's literal number_format string exactly (backslash-escaped).
@@ -239,12 +238,12 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     for r in range(info_row_start, info_row_end + 1):
         set_row_height(r, heights["info_box"])
 
-    if cfg.get("show_qr") and cfg.get("qr_content"):
+    if cfg.get("qr_image_bytes"):
         # Column C is a deliberate spacer between the patient-address and
         # payment-notice boxes — always blank, regardless of how many rows
         # the boxes span — so a floating image anchored there can't overlap
         # existing text or disturb the tested grid/merge/print-area layout.
-        qr_buf = BytesIO(generate_qr_png_bytes(cfg["qr_content"]))
+        qr_buf = BytesIO(cfg["qr_image_bytes"])
         qr_image = XLImage(qr_buf)
         # openpyxl sizes images in pixels at a 96dpi assumption when
         # converting to the saved anchor's EMU extent (verified empirically:

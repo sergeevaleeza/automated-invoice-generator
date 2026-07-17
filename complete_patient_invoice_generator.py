@@ -36,7 +36,7 @@ from invoice_models import (
 )
 from clinic_config import load_clinic_config
 import run_history
-from qr_code import generate_qr_png_bytes, qr_settings
+from qr_code import resolve_qr_image_bytes
 
 # Excel invoice generation (mirrors the PDF layout, no shared business logic)
 from excel_invoice_generator import generate_excel_invoice
@@ -771,9 +771,9 @@ class PatientInvoiceGenerator:
     def add_optimized_footer(self, canvas, doc):
         """Add two-line footer centered at the bottom of each page, plus an
         optional QR code in the bottom-right corner (config: show_qr /
-        qr_content — see qr_code.py). The footer text is horizontally
-        centered and leaves clear space on the right at this length, so a
-        ~0.9in QR in the corner doesn't overlap it."""
+        qr_image_path / qr_content — see qr_code.py). The footer text is
+        horizontally centered and leaves clear space on the right at this
+        length, so a ~0.9in QR in the corner doesn't overlap it."""
         canvas.saveState()
         font_size = 8
         canvas.setFont("Helvetica", font_size)
@@ -792,13 +792,12 @@ class PatientInvoiceGenerator:
         canvas.drawString(x1, 0.55 * inch, line1)
         canvas.drawString(x2, 0.35 * inch, line2)
 
-        show_qr, qr_content = qr_settings(self.clinic)
-        if show_qr and qr_content:
+        qr_bytes = resolve_qr_image_bytes(self.clinic)
+        if qr_bytes:
             qr_size = 0.9 * inch
             qr_x = page_width - (0.65 * inch) - qr_size
             qr_y = 0.2 * inch
-            qr_png = generate_qr_png_bytes(qr_content)
-            canvas.drawImage(ImageReader(BytesIO(qr_png)), qr_x, qr_y,
+            canvas.drawImage(ImageReader(BytesIO(qr_bytes)), qr_x, qr_y,
                               width=qr_size, height=qr_size, mask='auto')
 
         canvas.restoreState()

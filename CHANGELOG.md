@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased] — Use the real Zelle QR image instead of a generated one (2026-07-16)
+
+### Changed
+
+#### 1. Static, pre-made QR image takes priority over the generated one
+- A real payment QR like Zelle's isn't just a URL — it's bank/Zelle-issued and encodes data a generator can't reproduce from a plain string. Added `templates/zelle_qr.jpg` (the actual clinic-issued Zelle QR image, committed to the repo the same way `templates/Access_Multi_Letter_Cover.docx` already is) and a new optional `qr_image_path` clinic config field.
+- `qr_code.py`: added `resolve_qr_image_bytes(clinic)`, the single place both generators call. Resolution order: (1) `qr_image_path` (resolved relative to the repo root) if the file exists, (2) generate from `qr_content` via the `qrcode` library (unchanged from before), (3) `None` if `show_qr` is off or nothing usable is configured. `qr_settings()` now returns a 3-tuple `(show_qr, qr_content, qr_image_path)`.
+- PDF (`add_optimized_footer()`) and Excel (`_clinic_derived_config()`/embedding block) both now call `resolve_qr_image_bytes()` directly instead of generating from `qr_content` themselves — no priority logic duplicated between the two.
+- Real `clinic_config.json`: `qr_image_path` set to `templates/zelle_qr.jpg` (the static image used in practice); `qr_content` updated to the clinic's actual Zelle enrollment link (decoded from the QR: `{"name":"IRA BILLING AND MANAGEMENT, INC","action":"payment","token":"access.msmc@gmail.com"}`) so a *working* Zelle QR still generates as a fallback if the static image file is ever missing, instead of falling back to a plain pricing-page link.
+- `tests/test_qr_code.py` extended with a `TestResolveQrImageBytes` class (priority order, missing-file fallback, disabled/unconfigured → `None`, and a sanity check against the real committed `templates/zelle_qr.jpg`) and split the PDF/Excel embedding tests into explicit static-image and generated-fallback cases. Full suite (68/68) and a manual pipeline run against the real `clinic_config.json` confirmed the static image embeds correctly in both formats (Excel anchors at row 9, column C — matching the payment-notice box position).
+
 ## [Unreleased] — Superbill export for a selected patient (2026-07-16)
 
 ### Added

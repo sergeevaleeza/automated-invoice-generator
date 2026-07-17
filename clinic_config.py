@@ -30,7 +30,8 @@ REQUIRED_KEYS = [
 
 # Optional fields, not in REQUIRED_KEYS — a config from before these
 # features existed keeps working unchanged (they just stay off/empty):
-#   show_qr / qr_content        — see qr_code.py
+#   show_qr / qr_image_path /
+#     qr_content                — see qr_code.py
 #   default_icd10_codes         — list of ICD-10 strings pre-filled (still
 #                                  editable in the UI) on the superbill
 #   default_cpt_by_service_type — dict mapping a lowercased type_of_service
