@@ -32,11 +32,32 @@ payment info) to generate invoices. It's never hardcoded in this repo —
    zelle_email = "billing@yourclinic.com"
    check_payable_to = "Jane A. Doe, MD"
    provider_name_for_signature = "Jane A. Doe, MD"
+
+   # --- Optional fields below — omit entirely if you don't use these features ---
+
+   # QR code on invoices (PDF + Excel). qr_image_path takes priority when
+   # set and the file exists in the repo (e.g. a real bank/Zelle-issued QR
+   # image committed under templates/) — falls back to generating a QR
+   # from qr_content (a URL/text) otherwise.
+   show_qr = false
+   qr_image_path = "templates/zelle_qr.jpg"
+   qr_content = "https://yourclinic.example.com/pricing.html"
+
+   # Superbill export defaults (still editable per-patient in the UI).
+   default_icd10_codes = ["Z00.00"]
+
+   [clinic_config.default_cpt_by_service_type]
+   psychotherapy = "90837"
+   "med management" = "99213"
    ```
 
    The values above are placeholders — replace them with your practice's
    real information. Field names must match exactly (same keys as
-   `clinic_config.example.json`).
+   `clinic_config.example.json`). **Note:** every field your local
+   `clinic_config.json` has, including these optional ones, needs to be
+   copied into Secrets separately — they're two independent config sources,
+   so adding a field locally (e.g. turning on `show_qr`) does nothing on
+   Streamlit Cloud until you paste the same change into Secrets too.
 
    For **local testing** of the secrets path, save the same block to
    `.streamlit/secrets.toml` in the project root (already gitignored —

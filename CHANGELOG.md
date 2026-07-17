@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased] — Escalating 2nd/Final Notice letters for duplicate invoices (2026-07-17)
+## [Unreleased] — Document optional clinic_config fields in DEPLOY.md (2026-07-17)
+
+### Fixed
+
+#### 1. Streamlit Cloud Secrets snippet was missing every optional field added this session
+- `docs/DEPLOY.md`'s `[clinic_config]` Secrets example only ever listed `REQUIRED_KEYS` — `show_qr`, `qr_image_path`, `qr_content`, `default_icd10_codes`, and `default_cpt_by_service_type` were never documented there, even though they'd all been added to `clinic_config.example.json` across earlier entries this session. Root cause of a real deployed-app bug: a local `clinic_config.json` and Streamlit Cloud's Secrets are two independent config sources (`clinic_config.py` picks whichever exists), so turning `show_qr` on locally has no effect on Streamlit Cloud until the same field is pasted into Secrets too — invoices generated on the deployed app were silently missing the QR code because Secrets had never been given `show_qr`/`qr_image_path`/`qr_content` at all (defaulting to disabled, per `qr_settings()`'s designed fallback behavior — not a code bug).
+- Added all five optional fields to the documented Secrets TOML snippet, plus an explicit note that local `clinic_config.json` and Secrets don't sync with each other.
 
 ### Added
 
