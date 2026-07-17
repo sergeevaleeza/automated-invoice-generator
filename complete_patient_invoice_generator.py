@@ -483,10 +483,13 @@ class PatientInvoiceGenerator:
             ))
 
         # Calculate total_due: negative previous_balance acts as a credit, reducing the total.
-        # Deliberately NOT floored at 0 here — generate_invoices() checks
-        # `total_due < 0` immediately after calling this method and skips
-        # the patient before any generation happens, so a floor here would
-        # (and previously did) make that check permanently unreachable.
+        # Deliberately NOT floored at 0 here — callers that need the true
+        # (possibly negative) net balance, e.g. to detect a credit and
+        # report it, would otherwise lose that information. Callers that
+        # need a non-negative "amount due" for display (generate_invoices())
+        # floor it themselves: a credit-balance patient still gets an
+        # invoice — showing the credit as a line item and $0.00 due — not
+        # a negative number.
         subtotal_copay = float(patient_df['copay'].sum()) + previous_balance
         subtotal_paid = float(patient_df['paid'].sum())
         total_due = subtotal_copay - subtotal_paid
@@ -1020,7 +1023,8 @@ class PatientInvoiceGenerator:
         Checks: patients missing from the roster or matched with low
         confidence, missing/malformed addresses, missing service dates,
         charges with no service description, and negative (credit)
-        balances — patients generate_invoices() will skip entirely.
+        balances — these patients are still invoiced, not skipped, but
+        it's useful to see who has a credit before generating.
         """
         issues: List[ValidationIssue] = []
 
@@ -1081,16 +1085,18 @@ class PatientInvoiceGenerator:
                         detail=f"Charge/payment on {display_date} has no service description.",
                     ))
 
-            # Same check generate_invoices() uses to decide whether to skip
-            # this patient entirely — reused directly rather than
-            # recomputed, so validation can never drift from real behavior.
+            # Same calculation generate_invoices() uses — reused directly
+            # rather than recomputed, so validation can never drift from
+            # real behavior. A negative net balance doesn't skip the
+            # patient; it's still invoiced (showing the credit, $0.00 due).
             _lines, total_due, _df = self._generate_invoice_lines(patient_df)
             if total_due < 0:
                 issues.append(ValidationIssue(
                     category="negative_balance", severity="warning",
                     patient_name=patient_name,
                     detail=f"Net balance is a credit of ${abs(total_due):.2f}. "
-                           f"This patient will be skipped entirely during generation.",
+                           f"This patient will still be invoiced, showing the credit "
+                           f"and $0.00 due.",
                 ))
 
         return ValidationReport(
@@ -1178,15 +1184,18 @@ class PatientInvoiceGenerator:
                     if is_ambiguous:
                         self.logger.warning("Ambiguous roster match for a patient")
 
-                    # Generate invoice lines
-                    lines, total_due, original_df = self._generate_invoice_lines(patient_df)
+                    # Generate invoice lines. total_due can come back negative
+                    # (net credit) — that patient still gets an invoice, not
+                    # a skip, so they see the credit reflected in their
+                    # "Previous Balance (Overpaid)" line item; only the
+                    # displayed "amount due" is floored at 0, since they
+                    # don't actually owe anything.
+                    lines, raw_total_due, original_df = self._generate_invoice_lines(patient_df)
+                    total_due = max(0, raw_total_due)
 
-                    if total_due < 0:
-                        reason = "Credit balance (overpaid)"
-                        self.logger.info(f"{reason}, skipping a patient")
-                        summary.skipped_patients.append((patient_name, reason))
-                        summary.total_skipped += 1
-                        continue
+                    if raw_total_due < 0:
+                        self.logger.info("Credit balance for a patient — generating invoice to show the credit")
+                        summary.credit_balance_count = getattr(summary, 'credit_balance_count', 0) + 1
                     elif total_due == 0:
                         self.logger.info("Zero balance for a patient, generating invoice to show paid in full")
                         summary.zero_balance_count = getattr(summary, 'zero_balance_count', 0) + 1

@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased] — Correction: don't skip overpaid patients after all (2026-07-16)
+
+### Changed
+
+#### 1. Overpaid (credit-balance) patients are invoiced, not skipped
+- Reverses part of the previous entry: that fix made the dead-code `total_due < 0` skip check reachable again, on the assumption its original intent (skip credit-balance patients) was the desired behavior. Per clarification, it wasn't — a patient who overpaid should still receive an invoice showing their credit and $0.00 due, not be silently excluded from the batch. They already have a "Previous Balance (Overpaid)" line item showing the credit amount; the only thing that changes is whether an invoice is generated at all.
+- `generate_invoices()` no longer skips on `total_due < 0`. It now floors the value for display (`total_due = max(0, raw_total_due)` — nobody's invoice should show a negative "amount due") while still generating the PDF/Excel/DOCX/CSV normally. Tracks a `credit_balance_count` on the summary (informational, mirroring the existing `zero_balance_count`) instead of adding to `skipped_patients`.
+- `_generate_invoice_lines()` keeps returning the unfloored `total_due` (from the previous fix) — that part was correct and is still needed so callers can tell a true credit apart from an exact zero balance; only `generate_invoices()`'s *use* of a negative value (skip vs. floor-and-invoice) was wrong.
+- `validate_before_generation()`'s `negative_balance` warning text updated: no longer says the patient "will be skipped," says they'll "still be invoiced, showing the credit and $0.00 due."
+- `tests/test_credit_balance.py` rewritten to assert the corrected behavior: a pure-credit patient is invoiced (not skipped, `Due: $0.00`), its line items actually contain the credit amount, an offsetting case still nets correctly, and validation's message no longer implies a skip. Full suite (16/16) and the PDF/Excel/both regression pipeline confirmed unaffected otherwise.
+
 ## [Unreleased] — Fix credit-balance skip logic (2026-07-16)
 
 ### Fixed
