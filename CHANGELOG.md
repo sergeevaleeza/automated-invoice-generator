@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased] — Phase 0: Excel layout match (2026-07-16)
+
+### Security
+
+#### 0. Real patient data removed from git history
+- A commit (`a7f35ba`) briefly added a test fixture containing a real patient's name and address instead of synthetic data, on the public `main` branch. Remediated same-day: repo set to private, the offending commit dropped from `main` (it was the branch tip, so no history rebase was needed — a clean reset), and the fixture recommitted with fabricated placeholder data. See `tests/conftest.py` for the synthetic-only policy going forward. If you're reading this after a `git clone`, the removed commit is not reachable from any branch.
+
+### Changed
+
+#### 1. Excel invoice layout rewritten to match the approved fixture exactly
+- `excel_invoice_generator.py` is substantially rewritten: the sheet is now **5 columns (A–E)**, not 4 — column C is a spacer between the patient-address block and the payment-notice box on rows 10–14, and item-table rows merge B:C for Description (giving it a wider span) while A/D/E stay single-column (Service Date / Amount Paid / Copay-Deductible).
+- Column widths: A=15, C=32.140625, D=20.140625 (exact fixture values); B and E are deliberately left unset, matching the fixture's use of Excel's implicit default width rather than an explicit one.
+- Replaced the previous 3-tier font/row-height auto-shrink system with the fixture's fixed sizing: Arial 12 bold (clinic header), Arial 10 bold (contact info/statement labels/subtotal/total/portion-due), Arial 13 bold (title), Arial 9 (line items), Arial 11 bold (signature). Row heights are the fixture's exact values (18/18/18/6/15.95×4/12/15×5/12/20.1/6/15×2/12/18/15/…). Item rows below the fixed header extend downward 1:1 with item count, shifting SUBTOTAL/TOTAL/bottom-boxes/signature down by the same amount — everything above the item table (header through the item-table header row) stays fixed.
+- Dropped the multi-tier print-scaling logic entirely; a single `fitToPage=True` (no explicit `paperSize`/`fitToWidth`/`fitToHeight`, matching the fixture's implicit-default style) now handles fitting arbitrary content onto one printed Letter page via Excel's own print-time scaling, rather than programmatically shrinking fonts.
+- The payment-notice box (D10:E14) now uses the approved **fixed 5-line literal text** (with a deliberate mid-sentence line break before "(IRA Billing and Mgmt)" and specific leading whitespace) instead of the previous 4-line, auto-wrap-estimated version — sized to exactly fit 5 rows by design, per the approved copy. The patient-address box still uses dynamic wrap-line estimation (via `_count_wrapped_lines()`) since address content varies, floored at 5 rows to match the fixture.
+- Per the fixture: the payment-notice box has **no border** (despite an earlier ask for one — the committed fixture is the ground truth for Phase 0 and doesn't have it). The "YOUR PORTION DUE" box (column C only) has **top-only / bottom-only** borders with no left/right — different from the "AMOUNT ENCLOSED" box (D:E merged), which gets a full `apply_box_border()` outline. Both are intentional, fixture-verified shapes, not oversights.
+- Normalized two apparent authoring artifacts in the fixture rather than reproducing them: item rows 22–28 have explicit 15.0pt height instead of the fixture's unset/default (row 29, the last item, does have an explicit height — the inconsistency looks unintentional), and the SUBTOTAL row's B:C cell no longer gets a stray "double" bottom border that the rest of the row (A/D/E) doesn't have (would otherwise print as a broken half-underline under just the word "SUBTOTAL"). Both are documented in `tests/test_excel_invoice_generator.py`.
+- Bugfix found while building this: `Border(top=THIN)`-style partial construction in openpyxl leaves the other sides as raw Python `None` rather than an empty `Side()`, which reads back differently than "never styled." Fixed by explicitly passing `Side()` for every omitted side.
+
+### Added
+
+#### 2. Golden-file test suite for the Excel generator
+- Added `pytest` to `requirements.txt` and a `pyproject.toml` with `[tool.pytest.ini_options]` (no test framework existed in the repo before this).
+- Added `tests/fixtures/Example_2026_Invoice_07162026.xlsx` (synthetic data only) as the approved reference layout, and `tests/test_excel_invoice_generator.py`, which generates an invoice from synthetic inputs matching the fixture's data and asserts dimensions, merges, column widths, row heights, cell values, key-cell styling (font/format/alignment/borders), print setup, and correct row-shifting behavior when there are more line items than the fixture's 8 — all against the fixture, cell-for-cell.
+
 ## [Unreleased] — 2026-07-16
 
 ### Added
