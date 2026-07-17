@@ -9,6 +9,7 @@ dates, and the has_cpt flag) so no billing business logic is duplicated here
 — this module is presentation only.
 """
 import math
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -19,9 +20,11 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter
+from openpyxl.drawing.image import Image as XLImage
 
 from invoice_models import PatientData, InvoiceLine, format_date_for_display
 from clinic_config import load_clinic_config
+from qr_code import generate_qr_png_bytes, qr_settings
 
 # --- Static layout config: labels, widths, margins, row heights, fonts ----
 # Clinic identity (name, addresses, EIN/NPI, payment info) is NOT here — it's
@@ -89,6 +92,8 @@ def _clinic_derived_config(clinic: dict) -> dict:
         "signature_label": f"Provider Signature - {clinic['provider_name_for_signature']}",
         "footer_line1": f"If you have questions regarding your bill, please contact us at {clinic['phone']}.",
         "footer_line2": f"For current pricing, please visit: {clinic['pricing_page_url']}",
+        "show_qr": qr_settings(clinic)[0],
+        "qr_content": qr_settings(clinic)[1],
     }
 
 # Matches the fixture's literal number_format string exactly (backslash-escaped).
@@ -233,6 +238,21 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     # No border on the payment-notice box — matches the approved fixture exactly.
     for r in range(info_row_start, info_row_end + 1):
         set_row_height(r, heights["info_box"])
+
+    if cfg.get("show_qr") and cfg.get("qr_content"):
+        # Column C is a deliberate spacer between the patient-address and
+        # payment-notice boxes — always blank, regardless of how many rows
+        # the boxes span — so a floating image anchored there can't overlap
+        # existing text or disturb the tested grid/merge/print-area layout.
+        qr_buf = BytesIO(generate_qr_png_bytes(cfg["qr_content"]))
+        qr_image = XLImage(qr_buf)
+        # openpyxl sizes images in pixels at a 96dpi assumption when
+        # converting to the saved anchor's EMU extent (verified empirically:
+        # 65px round-tripped to 0.677in, not the 0.9in intended) — 86px/96dpi ≈ 0.9in.
+        qr_image.width = qr_image.height = 86
+        qr_image.anchor = f"C{info_row_start}"
+        ws.add_image(qr_image)
+
     row = info_row_end + 1
     set_row_height(row, heights["spacer_after_info"])
     row += 1

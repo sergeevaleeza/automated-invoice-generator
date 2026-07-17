@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased] — QR code on invoices (2026-07-16)
+
+### Added
+
+#### 1. Optional QR code, PDF and Excel, config-gated
+- Added `qrcode[pil]` to `requirements.txt` and `qr_code.py`: `generate_qr_png_bytes(content)` (presentation-agnostic PNG bytes, shared by both generators — no QR-building logic duplicated) and `qr_settings(clinic)` resolving `(show_qr, qr_content)` from a loaded clinic config, defaulting to disabled and falling back to the clinic's `website` if `qr_content` is omitted.
+- Two new **optional** `clinic_config.json` fields: `show_qr` (bool) and `qr_content` (string, e.g. a payment/pricing page URL). Deliberately not added to `REQUIRED_KEYS` — an existing config from before this feature keeps working unchanged (QR just stays off).
+- **PDF**: embedded in `add_optimized_footer()`, bottom-right corner, ~0.9in, sized to not overlap the centered footer text (verified the footer's longest line leaves ~1.75in clear on the right at this length). Uses `reportlab.lib.utils.ImageReader` wrapping the PNG bytes.
+- **Excel**: embedded as a floating `openpyxl` image anchored at column C of the patient-info/payment-notice row block — a column that's *always* blank there by design (the deliberate spacer between the two boxes, regardless of how many rows they span for a longer address), so it can't overlap existing text or disturb the Phase 0 golden-fixture layout. Verified this holds: the golden-fixture test suite (which uses `clinic_config.example.json`, `show_qr: false`) is completely unaffected. Sized via `width=height=86` (openpyxl converts image pixel dimensions to the saved anchor's EMU extent at 96dpi, confirmed empirically by round-tripping through save/reload — 86px ≈ 0.9in; an earlier 65px guess, by analogy to the PDF's 72dpi point-based sizing, actually produced 0.677in).
+- Added `tests/test_qr_code.py` (9 tests): PNG validity, `qr_settings()` defaults/fallback/override, PDF embedding present/absent by toggle (checking for a real `/Subtype /Image` XObject in the raw PDF bytes), Excel embedding present/absent by toggle and anchor position, and an explicit guard test asserting the shared test clinic config keeps `show_qr` off so no other Excel test silently starts embedding an unexpected image.
+- Note on numbering: this is "QR code on invoices" from the original Phase 1 feature list (item 5 there) — it got mislabeled "item 6" mid-session after Phase 1 was resequenced by dependency order (hygiene sweep moved to the front), which actually corresponds to the Superbill export. Flagged and corrected; Superbill is next.
+
 ## [Unreleased] — Phase 1 item 4: Enhanced batch summary (2026-07-16)
 
 ### Added

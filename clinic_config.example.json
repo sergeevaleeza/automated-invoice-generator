@@ -12,5 +12,7 @@
   "phone": "(000)000-0000",
   "zelle_email": "billing@yourclinic.com",
   "check_payable_to": "Jane A. Doe, MD",
-  "provider_name_for_signature": "Jane A. Doe, MD"
+  "provider_name_for_signature": "Jane A. Doe, MD",
+  "show_qr": false,
+  "qr_content": "https://yourclinic.example.com/pricing.html"
 }

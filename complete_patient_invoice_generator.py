@@ -23,6 +23,7 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+from reportlab.lib.utils import ImageReader
 
 # DOCX handling
 from docx import Document
@@ -34,6 +35,7 @@ from invoice_models import (
 )
 from clinic_config import load_clinic_config
 import run_history
+from qr_code import generate_qr_png_bytes, qr_settings
 
 # Excel invoice generation (mirrors the PDF layout, no shared business logic)
 from excel_invoice_generator import generate_excel_invoice
@@ -722,7 +724,11 @@ class PatientInvoiceGenerator:
             raise
 
     def add_optimized_footer(self, canvas, doc):
-        """Add two-line footer centered at the bottom of each page."""
+        """Add two-line footer centered at the bottom of each page, plus an
+        optional QR code in the bottom-right corner (config: show_qr /
+        qr_content — see qr_code.py). The footer text is horizontally
+        centered and leaves clear space on the right at this length, so a
+        ~0.9in QR in the corner doesn't overlap it."""
         canvas.saveState()
         font_size = 8
         canvas.setFont("Helvetica", font_size)
@@ -740,6 +746,16 @@ class PatientInvoiceGenerator:
 
         canvas.drawString(x1, 0.55 * inch, line1)
         canvas.drawString(x2, 0.35 * inch, line2)
+
+        show_qr, qr_content = qr_settings(self.clinic)
+        if show_qr and qr_content:
+            qr_size = 0.9 * inch
+            qr_x = page_width - (0.65 * inch) - qr_size
+            qr_y = 0.2 * inch
+            qr_png = generate_qr_png_bytes(qr_content)
+            canvas.drawImage(ImageReader(BytesIO(qr_png)), qr_x, qr_y,
+                              width=qr_size, height=qr_size, mask='auto')
+
         canvas.restoreState()
 
     def _generate_cover_letter(self, patient: PatientData, template_file: str, output_path: Path):

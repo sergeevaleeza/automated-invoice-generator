@@ -5,3 +5,4 @@ python-docx
 reportlab
 numpy
 pytest
+qrcode[pil]
