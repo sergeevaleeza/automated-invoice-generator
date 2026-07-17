@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] — Phase 1 item 2: Pre-flight validation report (2026-07-16)
+
+### Added
+
+#### 1. `validate_before_generation()` — read-only scan before any files are generated
+- Added `ValidationIssue`/`ValidationReport` dataclasses and a `VALIDATION_CATEGORIES` label map to `invoice_models.py`.
+- Added `PatientInvoiceGenerator.validate_before_generation(roster_file, invoice_file, custom_mapping=None) -> ValidationReport` — reuses `load_patient_roster()`/`load_invoice_data()`/`_match_patient()` (no parsing/matching logic duplicated) to scan for: patients with no roster match or a low-confidence/ambiguous fuzzy match (shows the best match + confidence score), missing or malformed addresses (blank street/city/state, or a postal code that doesn't look like a valid US ZIP), service lines with no visit date, charges/payments with no service description, and negative (credit) previous balances. Generates zero files.
+- `_match_patient()` now returns a third value, `confidence_score` (1.0 for an exact match, the fuzzy score otherwise, 0.0 for no match) — needed to detect low-confidence matches. Its one existing caller in `generate_invoices()` was updated; behavior there is unchanged.
+- Added `PatientInvoiceGenerator._generate_validation_report_text()` (a `@staticmethod`, mirrors `_generate_summary_report()`'s style) to render a `ValidationReport` as plain text for export alongside `Processing_Summary_*.txt`.
+- `invoice_app.py`: new "Pre-Flight Validation" section between the export-format selector and the Generate button. A "🔍 Run Validation" button parses the current roster/invoice into a scratch temp dir, runs the scan, and stores the report in `st.session_state` (first real use of session state in this app). Issues are grouped into expanders by category with error/warning icons, plus a "📄 Download Validation Report (.txt)" button. The "🚀 Generate All Reports" button is `disabled` until a checkbox ("I've reviewed the validation results...") is checked — and that checkbox, along with any prior report, is automatically reset whenever the uploaded roster/invoice files change (tracked via `UploadedFile.file_id`), so a stale review can't wave through different data.
+- Added `tests/test_validation.py` (4 tests): synthetic data covering all 7 issue categories, error/warning severity counts, a clean-data case producing zero issues, and the text export.
+
+#### 2. Found (not fixed): credit-balance skip logic in `generate_invoices()` is dead code
+- `_generate_invoice_lines()` always floors `total_due` at `max(0, ...)`, so `generate_invoices()`'s `if total_due < 0: skip as credit balance` can never trigger — a patient with a negative previous balance and no charges this period currently falls through to the zero-balance branch and gets a **$0.00 invoice generated** instead of being skipped. Confirmed empirically, not a misread. Per discussion, left generation behavior unchanged for this item — `validate_before_generation()` computes the pre-floor balance itself and surfaces it as a `negative_balance` warning (noting the current behavior) so it's visible before generating rather than fixed as a side effect. Revisit as its own deliberate change if the skip behavior should actually work.
+
 ## [Unreleased] — Phase 1 item 1 follow-up: Streamlit secrets fallback for clinic config (2026-07-16)
 
 ### Fixed

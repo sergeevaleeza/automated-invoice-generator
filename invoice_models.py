@@ -59,6 +59,45 @@ class ProcessingSummary:
     processing_date: str
 
 
+# Pre-flight validation issue categories, in the order the validation panel
+# groups them.
+VALIDATION_CATEGORIES = {
+    "unmatched_patient": "No roster match",
+    "low_confidence_match": "Low-confidence roster match",
+    "ambiguous_match": "Ambiguous roster match",
+    "malformed_address": "Missing or malformed address",
+    "missing_service_date": "Missing service date",
+    "missing_description": "Charge with no service description",
+    "negative_balance": "Credit / negative balance",
+}
+
+
+@dataclass
+class ValidationIssue:
+    """A single pre-flight data-quality finding for one patient group."""
+    category: str  # key into VALIDATION_CATEGORIES
+    severity: str  # "error" or "warning"
+    patient_name: str  # raw name as it appears in the invoice workbook
+    detail: str  # human-readable explanation, no PHI beyond the patient's own name
+
+
+@dataclass
+class ValidationReport:
+    """Result of a pre-flight scan over the roster + invoice workbook,
+    before any files are generated."""
+    issues: List[ValidationIssue]
+    total_patient_groups: int
+    generated_at: str
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for i in self.issues if i.severity == "error")
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for i in self.issues if i.severity == "warning")
+
+
 def format_date_for_display(date_value, logger: Optional[logging.Logger] = None) -> str:
     """Format date value to MM/DD/YYYY format. Shared by PDF and Excel invoice generators."""
     if pd.isna(date_value) or date_value == '' or date_value is None:

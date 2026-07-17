@@ -10,7 +10,7 @@ import os
 
 # Import your existing class
 from complete_patient_invoice_generator import PatientInvoiceGenerator
-from invoice_models import REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template
+from invoice_models import REQUIRED_TEMPLATE_PLACEHOLDERS, validate_cover_letter_template, VALIDATION_CATEGORIES
 from clinic_config import get_clinic_config_source, ClinicConfigError
 
 # --- Config: cover letter template path + required placeholders ---
@@ -189,7 +189,96 @@ with tab3:
         "Both PDF & Excel": "both",
     }[export_format_label]
 
-    if st.button("🚀 Generate All Reports", type="primary", use_container_width=True):
+    st.subheader("Pre-Flight Validation")
+    st.caption(
+        "Scans the roster and invoice data for issues — unmatched or low-confidence "
+        "patient matches, missing/malformed addresses, missing service dates, charges "
+        "with no description, and credit balances — before anything is generated."
+    )
+
+    # Custom mapping is defined in tab2 but used here and by validation below.
+    custom_mapping = {}
+    if name_col: custom_mapping['name'] = name_col
+    if visit_date_col: custom_mapping['visit_date'] = visit_date_col
+    if total_amount_col: custom_mapping['total_amount'] = total_amount_col
+    if copay_col: custom_mapping['copay'] = copay_col
+    if paid_col: custom_mapping['paid'] = paid_col
+
+    current_files_fingerprint = (roster_file.file_id, invoice_file.file_id)
+    if st.session_state.get("validation_files_fingerprint") != current_files_fingerprint:
+        # Roster/invoice changed since the last validation run (or this is
+        # the first run) — any prior review no longer applies.
+        st.session_state.pop("validation_report", None)
+        st.session_state["validation_reviewed"] = False
+
+    if st.button("🔍 Run Validation", use_container_width=True):
+        with st.spinner("Validating..."):
+            with tempfile.TemporaryDirectory() as val_temp_dir:
+                val_temp_path = Path(val_temp_dir)
+                val_roster_path = val_temp_path / "roster.csv"
+                val_invoice_path = val_temp_path / "invoice.xlsx"
+                with open(val_roster_path, "wb") as f:
+                    f.write(roster_file.getbuffer())
+                with open(val_invoice_path, "wb") as f:
+                    f.write(invoice_file.getbuffer())
+
+                try:
+                    validator = PatientInvoiceGenerator(
+                        amount_due_strategy=amount_strategy,
+                        statement_date=statement_date.strftime("%Y-%m-%d")
+                    )
+                    st.session_state["validation_report"] = validator.validate_before_generation(
+                        roster_file=str(val_roster_path),
+                        invoice_file=str(val_invoice_path),
+                        custom_mapping=custom_mapping if custom_mapping else None,
+                    )
+                    st.session_state["validation_files_fingerprint"] = current_files_fingerprint
+                    st.session_state["validation_reviewed"] = False
+                except Exception as e:
+                    st.error(f"Validation failed: {str(e)}")
+                    st.session_state.pop("validation_report", None)
+
+    validation_report = st.session_state.get("validation_report")
+    if validation_report is not None:
+        if validation_report.issues:
+            st.warning(
+                f"⚠️ {validation_report.error_count} error(s), {validation_report.warning_count} "
+                f"warning(s) found across {validation_report.total_patient_groups} patient group(s)."
+            )
+            issues_by_category = {}
+            for issue in validation_report.issues:
+                issues_by_category.setdefault(issue.category, []).append(issue)
+            for category, label in VALIDATION_CATEGORIES.items():
+                category_issues = issues_by_category.get(category)
+                if not category_issues:
+                    continue
+                with st.expander(f"{label} ({len(category_issues)})"):
+                    for issue in category_issues:
+                        icon = "🛑" if issue.severity == "error" else "⚠️"
+                        st.write(f"{icon} **{issue.patient_name}** — {issue.detail}")
+        else:
+            st.success(f"✅ No issues found across {validation_report.total_patient_groups} patient group(s).")
+
+        validation_text = PatientInvoiceGenerator._generate_validation_report_text(validation_report)
+        st.download_button(
+            "📄 Download Validation Report (.txt)",
+            data=validation_text,
+            file_name=f"Validation_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            mime="text/plain",
+        )
+
+        st.checkbox(
+            "I've reviewed the validation results above and want to proceed with generation",
+            key="validation_reviewed",
+        )
+    else:
+        st.info("Run validation before generating reports.")
+
+    generation_blocked = not st.session_state.get("validation_reviewed", False)
+    if generation_blocked:
+        st.caption("⬆️ Run validation and check the box above to enable generation.")
+
+    if st.button("🚀 Generate All Reports", type="primary", use_container_width=True, disabled=generation_blocked):
         try:
             with st.spinner("Processing invoices... This may take a few minutes."):
                 
@@ -216,15 +305,9 @@ with tab3:
                     else:
                         # Path to the bundled default template
                         shutil.copy(active_template_source, template_path)
-                    
-                    # Create custom mapping if provided
-                    custom_mapping = {}
-                    if name_col: custom_mapping['name'] = name_col
-                    if visit_date_col: custom_mapping['visit_date'] = visit_date_col
-                    if total_amount_col: custom_mapping['total_amount'] = total_amount_col
-                    if copay_col: custom_mapping['copay'] = copay_col
-                    if paid_col: custom_mapping['paid'] = paid_col
-                    
+
+                    # custom_mapping was already built above, alongside validation
+
                     # Initialize generator
                     generator = PatientInvoiceGenerator(
                         amount_due_strategy=amount_strategy,

@@ -30,7 +30,7 @@ from docx import Document
 # Shared data structures + formatting helpers (also used by excel_invoice_generator.py)
 from invoice_models import (
     PatientData, InvoiceLine, ProcessingSummary, format_date_for_display,
-    REQUIRED_TEMPLATE_PLACEHOLDERS,
+    REQUIRED_TEMPLATE_PLACEHOLDERS, ValidationIssue, ValidationReport, VALIDATION_CATEGORIES,
 )
 from clinic_config import load_clinic_config
 
@@ -67,6 +67,13 @@ class PatientInvoiceGenerator:
              table_top_pad=2, table_bot_pad=2,
              font_body=7, font_header=9, font_header2=8, font_title=10, font_table=6),
     ]
+
+    # A fuzzy match below this score is flagged for review during pre-flight
+    # validation, even though it's already above the harder 0.6-per-name-part
+    # cutoff _match_patient uses to consider it a candidate at all. Matches
+    # this constants value against the existing ambiguity threshold in
+    # _match_patient (also 0.85) for a consistent "high confidence" bar.
+    LOW_CONFIDENCE_THRESHOLD = 0.85
 
     def __init__(self, amount_due_strategy: str = "auto", statement_date: Optional[str] = None,
                  clinic_config: Optional[Dict] = None):
@@ -344,14 +351,19 @@ class PatientInvoiceGenerator:
 
         return max(0, amount_due)  # Floor at 0
 
-    def _match_patient(self, name: str, patients: Dict[str, PatientData]) -> Tuple[Optional[PatientData], bool]:
-        """Match patient by name with fuzzy matching support"""
+    def _match_patient(self, name: str, patients: Dict[str, PatientData]) -> Tuple[Optional[PatientData], bool, float]:
+        """Match patient by name with fuzzy matching support.
+
+        Returns (patient_or_None, is_ambiguous, confidence_score) where
+        confidence_score is 1.0 for an exact match, the best fuzzy-match
+        score in [0, 1) for a fuzzy match, or 0.0 if no match was found.
+        """
         first_name, last_name = self._parse_patient_name(name)
 
         # Try exact match first
         name_key = f"{first_name.lower()}_{last_name.lower()}"
         if name_key in patients:
-            return patients[name_key], False
+            return patients[name_key], False, 1.0
 
         # Try partial/fuzzy matching with string similarity
         first_lower = first_name.lower().strip()
@@ -423,11 +435,11 @@ class PatientInvoiceGenerator:
             # Return ambiguous if multiple high-scoring matches
             is_ambiguous = len([m for m in matches if m[1] >= 0.85]) > 1
 
-            return best_match[0], is_ambiguous
+            return best_match[0], is_ambiguous, best_match[1]
 
         # No match found
         self.logger.warning("No patient match found for a roster entry")
-        return None, False
+        return None, False, 0.0
 
     def _generate_invoice_lines(self, patient_df: pd.DataFrame) -> Tuple[List[InvoiceLine], float, pd.DataFrame]:
         """Generate invoice lines for a patient"""
@@ -977,6 +989,147 @@ class PatientInvoiceGenerator:
             self.logger.error(f"Error generating summary report: {e}")
             raise
 
+    def _check_address_issue(self, patient: PatientData) -> Optional[str]:
+        """Return a description of the problem if a patient's address looks
+        missing or malformed, else None."""
+        if not patient.address_line1.strip():
+            return "Missing street address"
+        if not patient.city.strip():
+            return "Missing city"
+        if not patient.state.strip():
+            return "Missing state"
+        postal = patient.postal_code.strip()
+        if not postal:
+            return "Missing postal code"
+        if not re.match(r'^\d{5}(-\d{4})?$', postal):
+            return f"Postal code '{postal}' doesn't look like a valid US ZIP"
+        return None
+
+    def validate_before_generation(self, roster_file: str, invoice_file: str,
+                                    custom_mapping: Dict = None) -> ValidationReport:
+        """Read-only pre-flight scan over the roster + invoice workbook —
+        generates no files. Reuses load_patient_roster()/load_invoice_data()/
+        _match_patient() so matching and parsing logic isn't duplicated;
+        this method only adds the read-only inspection pass on top.
+
+        Checks: patients missing from the roster or matched with low
+        confidence, missing/malformed addresses, missing service dates,
+        charges with no service description, and negative (credit)
+        balances that _generate_invoice_lines() will floor to $0 rather
+        than skip (see CHANGELOG — a separate, pre-existing behavior this
+        only surfaces, doesn't change).
+        """
+        issues: List[ValidationIssue] = []
+
+        patients = self.load_patient_roster(roster_file)
+        invoice_df = self.load_invoice_data(invoice_file, custom_mapping)
+        patient_groups = invoice_df.groupby('name')
+
+        for patient_name, patient_df in patient_groups:
+            patient, is_ambiguous, score = self._match_patient(patient_name, patients)
+
+            if patient is None:
+                issues.append(ValidationIssue(
+                    category="unmatched_patient", severity="error",
+                    patient_name=patient_name,
+                    detail="No roster match found for this name.",
+                ))
+            elif score < self.LOW_CONFIDENCE_THRESHOLD:
+                issues.append(ValidationIssue(
+                    category="low_confidence_match", severity="warning",
+                    patient_name=patient_name,
+                    detail=f"Best match: {patient.first_name} {patient.last_name} "
+                           f"(PRN: {patient.prn}), confidence {score:.0%}.",
+                ))
+            elif is_ambiguous:
+                issues.append(ValidationIssue(
+                    category="ambiguous_match", severity="warning",
+                    patient_name=patient_name,
+                    detail=f"Multiple roster entries matched with similar confidence; "
+                           f"using {patient.first_name} {patient.last_name} (PRN: {patient.prn}).",
+                ))
+
+            if patient is not None:
+                address_issue = self._check_address_issue(patient)
+                if address_issue:
+                    issues.append(ValidationIssue(
+                        category="malformed_address", severity="warning",
+                        patient_name=patient_name, detail=address_issue,
+                    ))
+
+            for _, row in patient_df.iterrows():
+                visit_date = row.get('visit_date')
+                if pd.isna(visit_date) or str(visit_date).strip() == '':
+                    issues.append(ValidationIssue(
+                        category="missing_service_date", severity="error",
+                        patient_name=patient_name,
+                        detail="A service line has no visit date.",
+                    ))
+
+                total_amount = float(row.get('total_amount', 0) or 0)
+                copay = float(row.get('copay', 0) or 0)
+                paid = float(row.get('paid', 0) or 0)
+                service_type = str(row.get('type_of_service', '')).strip()
+                if (total_amount > 0 or copay > 0 or paid > 0) and not service_type:
+                    display_date = format_date_for_display(visit_date) or 'unknown date'
+                    issues.append(ValidationIssue(
+                        category="missing_description", severity="warning",
+                        patient_name=patient_name,
+                        detail=f"Charge/payment on {display_date} has no service description.",
+                    ))
+
+            previous_balance = float(patient_df.iloc[0].get('previous_balance', 0))
+            if previous_balance < 0:
+                issues.append(ValidationIssue(
+                    category="negative_balance", severity="warning",
+                    patient_name=patient_name,
+                    detail=f"Previous balance is a credit of ${abs(previous_balance):.2f}. "
+                           f"This currently still generates a $0.00 invoice rather than "
+                           f"being skipped (see CHANGELOG for details).",
+                ))
+
+        return ValidationReport(
+            issues=issues,
+            total_patient_groups=len(patient_groups),
+            generated_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        )
+
+    @staticmethod
+    def _generate_validation_report_text(report: ValidationReport) -> str:
+        """Render a ValidationReport as plain text, in the same style as
+        _generate_summary_report(), for export alongside Processing_Summary_*.txt."""
+        lines = []
+        lines.append("=" * 80)
+        lines.append("PRE-FLIGHT VALIDATION REPORT")
+        lines.append("=" * 80)
+        lines.append("")
+        lines.append(f"Generated: {report.generated_at}")
+        lines.append(f"Patient groups scanned: {report.total_patient_groups}")
+        lines.append(f"Errors: {report.error_count}    Warnings: {report.warning_count}")
+        lines.append("")
+
+        if not report.issues:
+            lines.append("No issues found.")
+        else:
+            by_category: Dict[str, List[ValidationIssue]] = {}
+            for issue in report.issues:
+                by_category.setdefault(issue.category, []).append(issue)
+
+            for category, label in VALIDATION_CATEGORIES.items():
+                category_issues = by_category.get(category)
+                if not category_issues:
+                    continue
+                lines.append(f"{label.upper()} ({len(category_issues)}):")
+                lines.append("-" * 40)
+                for issue in category_issues:
+                    lines.append(f"  [{issue.severity.upper()}] {issue.patient_name}: {issue.detail}")
+                lines.append("")
+
+        lines.append("=" * 80)
+        lines.append("End of Validation Report")
+        lines.append("=" * 80)
+        return "\n".join(lines)
+
     def generate_invoices(self, roster_file: str, invoice_file: str,
                           template_file: str, output_dir: str = "output",
                           custom_mapping: Dict = None, generate_csv: bool = True,
@@ -1015,7 +1168,7 @@ class PatientInvoiceGenerator:
             for patient_name, patient_df in patient_groups:
                 try:
                     # Match patient
-                    patient, is_ambiguous = self._match_patient(patient_name, patients)
+                    patient, is_ambiguous, _match_score = self._match_patient(patient_name, patients)
 
                     if is_ambiguous:
                         self.logger.warning("Ambiguous roster match for a patient")
