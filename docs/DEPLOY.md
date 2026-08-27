@@ -40,7 +40,7 @@ payment info) to generate invoices. It's never hardcoded in this repo —
    # image committed under templates/) — falls back to generating a QR
    # from qr_content (a URL/text) otherwise.
    show_qr = false
-   qr_image_path = "templates/zelle_qr.jpg"
+   qr_image_path = "templates/zelle_qr_large.jpg"
    qr_content = "https://yourclinic.example.com/pricing.html"
 
    # Superbill export defaults (still editable per-patient in the UI).

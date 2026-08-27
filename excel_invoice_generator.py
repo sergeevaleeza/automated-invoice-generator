@@ -56,7 +56,18 @@ LAYOUT_CONFIG = {
         clinic_header=18, spacer_after_clinic=6, contact=15.95, spacer_after_contact=12,
         info_box=15, spacer_after_info=12, title=20.1, spacer_after_title=6,
         statement=15, spacer_after_statement=12, item_header=18, item=15,
-        spacer_after_items=12, amount_box=17.1, spacer_after_amount=18, signature=15,
+        spacer_after_items=12, amount_box=17.1, signature=15,
+        # QR clearance/caption: the enlarged QR (anchored at column C in the
+        # info box, see _build_workbook) is taller than the info box's 5
+        # rows, so it needs deliberate room below to clear before the
+        # stub's own column-C labels start (see the QR sizing comment
+        # there for the math) — otherwise the two would visually overlap.
+        qr_clearance=20, qr_caption=14,
+        # Tear-off stub row: patients tear off the top of the page and keep
+        # it as a receipt, so STATEMENT DATE/Payment due date and YOUR
+        # PORTION DUE/AMOUNT ENCLOSED live here, stacked, above the
+        # dashed tear line.
+        tear_line=16,
     ),
 }
 
@@ -247,23 +258,36 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
         qr_image = XLImage(qr_buf)
         # openpyxl sizes images in pixels at a 96dpi assumption when
         # converting to the saved anchor's EMU extent (verified empirically:
-        # 65px round-tripped to 0.677in, not the 0.9in intended) — 86px/96dpi ≈ 0.9in.
-        qr_image.width = qr_image.height = 86
+        # 65px round-tripped to 0.677in, not the 0.9in intended) — matches
+        # the PDF's QR sizing (see complete_patient_invoice_generator.py's
+        # comment there for why 1.2in rather than the originally spec'd
+        # 1.4in) so the two export formats stay visually consistent.
+        qr_image.width = qr_image.height = round(1.2 * 96)
         qr_image.anchor = f"C{info_row_start}"
         ws.add_image(qr_image)
 
     row = info_row_end + 1
+    if cfg.get("qr_image_bytes"):
+        # Extra clearance below the info box: the enlarged QR (anchored at
+        # column C, ~1.2in tall) is taller than the info box's 5 rows, so
+        # without this it would visually bleed into the stub's own
+        # column-C labels directly below.
+        set_row_height(row, heights["qr_clearance"])
+        row += 1
+        qr_caption_font = Font(name=cfg["font_family"], size=8, italic=True)
+        ws.cell(row=row, column=3, value="Zelle QR Code").font = qr_caption_font
+        ws.cell(row=row, column=3).alignment = center
+        set_row_height(row, heights["qr_caption"])
+        row += 1
     set_row_height(row, heights["spacer_after_info"])
     row += 1
 
-    # --- Title ---
-    merged(row, 1, row, 5, cfg["statement_title"], title_font, center)
-    set_row_height(row, heights["title"])
-    row += 1
-    set_row_height(row, heights["spacer_after_title"])
-    row += 1
-
-    # --- Statement date row (labels at C, values merged D:E) ---
+    # --- Tear-off stub: STATEMENT DATE / Payment due date, then YOUR
+    # PORTION DUE / AMOUNT ENCLOSED, stacked above the tear line. Patients
+    # tear off the top of the page and keep it as a receipt, so these four
+    # values live here instead of scattered through the body. Each pair
+    # keeps its own original styling (date pair unboxed, amount pair
+    # boxed) rather than inventing a new look.
     ws.cell(row=row, column=3, value="STATEMENT DATE:").font = statement_font
     ws.cell(row=row, column=3).alignment = left_center
     merged(row, 4, row, 5, "Payment due date:", statement_font, left_center)
@@ -273,6 +297,45 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     ws.cell(row=row, column=3).alignment = left_center
     merged(row, 4, row, 5, payment_due_date.strftime('%m/%d/%Y'), statement_font, left_center)
     set_row_height(row, heights["statement"])
+    row += 1
+    set_row_height(row, heights["spacer_after_statement"])
+    row += 1
+
+    portion_label_row = row
+    ws.cell(row=row, column=3, value=cfg["amount_due_label"]).font = subtotal_total_font
+    ws.cell(row=row, column=3).alignment = left_center
+    merged(row, 4, row, 5, cfg["amount_enclosed_label"], subtotal_total_font, left_center)
+    set_row_height(row, heights["amount_box"])
+    row += 1
+    portion_value_row = row
+    due_cell = ws.cell(row=row, column=3, value=total_due)
+    due_cell.font = subtotal_total_font
+    due_cell.alignment = left_center
+    due_cell.number_format = CURRENCY_FMT
+    merged(row, 4, row, 5, "", subtotal_total_font, left_center)
+    set_row_height(row, heights["amount_box"])
+    row += 1
+    apply_box_border(ws, portion_label_row, 3, portion_value_row, 3)
+    apply_box_border(ws, portion_label_row, 4, portion_value_row, 5)
+    row += 0
+
+    # --- Tear line ---
+    tear_row = row
+    merged(tear_row, 1, tear_row, 5, "- - - - -  Detach and retain for your records  - - - - -",
+           Font(name=cfg["font_family"], size=8, italic=True, color="808080"), center)
+    thin_dashed = Side(style="dashed", color="000000")
+    for c in range(1, 6):
+        ws.cell(row=tear_row, column=c).border = Border(bottom=thin_dashed)
+    set_row_height(tear_row, heights["tear_line"])
+    row += 1
+    set_row_height(row, heights["spacer_after_statement"])
+    row += 1
+
+    # --- Title ---
+    merged(row, 1, row, 5, cfg["statement_title"], title_font, center)
+    set_row_height(row, heights["title"])
+    row += 1
+    set_row_height(row, heights["spacer_after_title"])
     row += 1
     set_row_height(row, heights["spacer_after_statement"])
     row += 1
@@ -344,28 +407,8 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     set_row_height(row, heights["spacer_after_items"])
     row += 1
 
-    # --- Bottom boxes: "YOUR PORTION DUE" (col C) and "AMOUNT ENCLOSED"
-    # (D:E merged) — both get a complete outline border. ---
-    portion_label_row = row
-    ws.cell(row=row, column=3, value=cfg["amount_due_label"]).font = subtotal_total_font
-    ws.cell(row=row, column=3).alignment = left_center
-    merged(row, 4, row, 5, cfg["amount_enclosed_label"], subtotal_total_font, left_center)
-    set_row_height(row, heights["amount_box"])
-    row += 1
-    portion_value_row = row
-    due_cell = ws.cell(row=row, column=3, value=total_due)
-    due_cell.font = subtotal_total_font
-    due_cell.alignment = left_center
-    due_cell.number_format = CURRENCY_FMT
-    merged(row, 4, row, 5, "", subtotal_total_font, left_center)
-    set_row_height(row, heights["amount_box"])
-    row += 1
-    apply_box_border(ws, portion_label_row, 3, portion_value_row, 3)
-    apply_box_border(ws, portion_label_row, 4, portion_value_row, 5)
-    set_row_height(row, heights["spacer_after_amount"])
-    row += 1
-
-    # --- Provider signature ---
+    # --- Provider signature --- (YOUR PORTION DUE / AMOUNT ENCLOSED now
+    # live in the tear-off stub near the top of the page, not here)
     merged(row, 1, row, 5, "_________________________________", sig_font, right_center)
     set_row_height(row, heights["signature"])
     row += 1

@@ -20,7 +20,7 @@ from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image as RLImage
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from reportlab.lib.utils import ImageReader
@@ -637,35 +637,95 @@ class PatientInvoiceGenerator:
                     f"   {self.clinic['mailing_address']}"
                 )
 
-                combined_table = Table([[patient_info_text, payment_info_text]], colWidths=[3 * inch, 3 * inch])
-                combined_table.setStyle(TableStyle([
+                combined_row = [patient_info_text, payment_info_text]
+                combined_col_widths = [3 * inch, 3 * inch]
+                combined_style = [
                     ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
                     ('FONTNAME', (1, 0), (1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, -1), p['font_body']),
                     ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                     ('LEFTPADDING', (0, 0), (-1, -1), 0),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                ]))
+                ]
+
+                # QR code (config: show_qr / qr_image_path / qr_content —
+                # see qr_code.py) lives here as a third column rather than
+                # the page-corner footer it used to be in: at the originally
+                # spec'd ~1.4in it measurably overlapped the provider
+                # signature block for longer patients in the footer's fixed
+                # bottom margin (see add_optimized_footer's docstring), so
+                # it moved somewhere its footprint can't collide with
+                # variable-length content. Sized at 1.2in rather than the
+                # full 1.4in for the same reason in this new spot: the
+                # image's height sets this row's height (taller than the
+                # patient/payment text alone needs), so every extra 0.1in
+                # here costs page space on every invoice — 1.2in keeps
+                # single-page fit working through ~18 line items at maximum
+                # compression (1.4in dropped that ceiling to ~16) while
+                # still being noticeably larger than the original 0.9in.
+                qr_bytes = resolve_qr_image_bytes(self.clinic)
+                if qr_bytes:
+                    qr_stub_size = 1.2 * inch
+                    qr_caption_style = ParagraphStyle(
+                        'QRCaption', parent=styles['Normal'], fontSize=7,
+                        alignment=TA_CENTER, fontName='Helvetica'
+                    )
+                    qr_cell = [
+                        RLImage(BytesIO(qr_bytes), width=qr_stub_size, height=qr_stub_size),
+                        Paragraph("Zelle QR Code", qr_caption_style),
+                    ]
+                    combined_row = [patient_info_text, payment_info_text, qr_cell]
+                    combined_col_widths = [2.3 * inch, 3.3 * inch, 1.6 * inch]
+                    combined_style.append(('ALIGN', (2, 0), (2, 0), 'CENTER'))
+                    combined_style.append(('RIGHTPADDING', (1, 0), (1, 0), 6))
+                    combined_style.append(('LEFTPADDING', (2, 0), (2, 0), 4))
+
+                combined_table = Table([combined_row], colWidths=combined_col_widths)
+                combined_table.setStyle(TableStyle(combined_style))
                 story.append(combined_table)
+                story.append(Spacer(1, p['spacer_small']))
+
+                # --- Tear-off stub: STATEMENT DATE / Payment due date and
+                # YOUR PORTION DUE / AMOUNT ENCLOSED, side by side above the
+                # tear line. Patients tear off the top of the page and keep
+                # it as a receipt, so these four boxes live here instead of
+                # scattered through the body — see CHANGELOG for why. Each
+                # pair keeps its own original styling (date pair unboxed,
+                # amount pair boxed) rather than inventing a new look.
+                stub_data = [
+                    ["STATEMENT DATE:", "Payment due date:", "YOUR PORTION DUE:", "AMOUNT ENCLOSED:"],
+                    [self.statement_date.strftime('%m/%d/%Y'), self.payment_due_date.strftime('%m/%d/%Y'),
+                     f"${total_due:.2f}", ""],
+                ]
+                stub_table = Table(stub_data, colWidths=[1.6 * inch, 1.6 * inch, 2 * inch, 2 * inch])
+                stub_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (1, -1), p['font_body']),
+                    ('FONTSIZE', (2, 0), (3, -1), p['font_body'] + 1),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('BOX', (2, 0), (2, 1), 1, colors.black),
+                    ('BOX', (3, 0), (3, 1), 1, colors.black),
+                ]))
+                story.append(stub_table)
+                story.append(Spacer(1, p['spacer_small']))
+
+                # --- Tear line: patients detach above this and keep the stub ---
+                story.append(HRFlowable(width="100%", thickness=0.75, dash=(3, 2), color=colors.black))
+                story.append(Spacer(1, 3))
+                tear_caption_style = ParagraphStyle(
+                    'TearCaption', parent=styles['Normal'], fontSize=7, alignment=TA_CENTER,
+                    textColor=colors.grey, fontName='Helvetica-Oblique'
+                )
+                # A literal scissors emoji isn't in Helvetica's base-14 glyph
+                # set — ReportLab would render it as a broken/missing-glyph
+                # box (verified). Plain dashes read as a "cut here" marker
+                # without needing an embedded Unicode-capable font.
+                story.append(Paragraph("- - - - -  Detach and retain for your records  - - - - -", tear_caption_style))
                 story.append(Spacer(1, p['spacer_small']))
 
                 # --- Patient Statement title ---
                 story.append(Paragraph(NOTICE_LEVEL_TITLES[notice_level], title_style))
-
-                # --- Statement dates ---
-                statement_info = [
-                    ["STATEMENT DATE:", "Payment due date:"],
-                    [self.statement_date.strftime('%m/%d/%Y'), self.payment_due_date.strftime('%m/%d/%Y')]
-                ]
-                statement_table = Table(statement_info, colWidths=[2 * inch, 2 * inch])
-                statement_table.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), p['font_body']),
-                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ]))
-                story.append(statement_table)
-                story.append(Spacer(1, p['spacer_small']))
 
                 # --- Service details table ---
                 # Amount Paid column = what patient paid per visit
@@ -737,23 +797,6 @@ class PatientInvoiceGenerator:
                     ('BOTTOMPADDING', (0, 0), (-1, -1), p['table_bot_pad']),
                 ]))
                 story.append(service_table)
-                story.append(Spacer(1, p['spacer_small']))
-
-                # --- Amount due section ---
-                amount_section = [
-                    ["YOUR PORTION DUE:", "AMOUNT ENCLOSED:"],
-                    [f"${total_due:.2f}", ""]
-                ]
-                amount_table = Table(amount_section, colWidths=[2 * inch, 2 * inch])
-                amount_table.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), p['font_body'] + 1),
-                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                    ('BOX', (0, 0), (0, 1), 1, colors.black),
-                    ('BOX', (1, 0), (1, 1), 1, colors.black),
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ]))
-                story.append(amount_table)
                 story.append(Spacer(1, p['spacer_sections']))
 
                 # --- Provider signature (always on same page as invoice table) ---
@@ -786,11 +829,19 @@ class PatientInvoiceGenerator:
             raise
 
     def add_optimized_footer(self, canvas, doc):
-        """Add two-line footer centered at the bottom of each page, plus an
-        optional QR code in the bottom-right corner (config: show_qr /
-        qr_image_path / qr_content — see qr_code.py). The footer text is
-        horizontally centered and leaves clear space on the right at this
-        length, so a ~0.9in QR in the corner doesn't overlap it."""
+        """Add two-line footer centered at the bottom of each page.
+
+        The QR code (config: show_qr / qr_image_path / qr_content — see
+        qr_code.py) is NOT drawn here — it lives in the patient/payment info
+        block near the top of the page instead (see the story-building code
+        above). It used to be a page-corner canvas draw down here, but at
+        the enlarged ~1.4in size it measurably overlapped the provider
+        signature block for longer patients (verified: 20 line items at the
+        tightest layout tier puts the signature text inside the QR's
+        bounding box). The footer's fixed bottom margin can't grow enough
+        to prevent that without costing significant single-page headroom,
+        so the QR moved somewhere its footprint can't collide with
+        variable-length content."""
         canvas.saveState()
         font_size = 8
         canvas.setFont("Helvetica", font_size)
@@ -808,14 +859,6 @@ class PatientInvoiceGenerator:
 
         canvas.drawString(x1, 0.55 * inch, line1)
         canvas.drawString(x2, 0.35 * inch, line2)
-
-        qr_bytes = resolve_qr_image_bytes(self.clinic)
-        if qr_bytes:
-            qr_size = 0.9 * inch
-            qr_x = page_width - (0.65 * inch) - qr_size
-            qr_y = 0.2 * inch
-            canvas.drawImage(ImageReader(BytesIO(qr_bytes)), qr_x, qr_y,
-                              width=qr_size, height=qr_size, mask='auto')
 
         canvas.restoreState()
 

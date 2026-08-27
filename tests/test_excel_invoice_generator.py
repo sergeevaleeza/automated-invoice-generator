@@ -79,9 +79,9 @@ def test_key_cell_styling_matches_fixture(tmp_path, golden_invoice_inputs):
     # (medium/double top border), both bottom boxes (both fully bordered),
     # and the signature line.
     sample_coords = [
-        "A1", "A10", "D10", "A16", "C18", "A21", "D21",
-        "A22", "D22", "B30", "D30", "B31", "E31",
-        "C33", "D33", "C34", "D34", "E34", "A36",
+        "A1", "A10", "D10", "A23", "C16", "A26", "D26",
+        "A27", "D27", "B35", "D35", "B36", "E36",
+        "C19", "D19", "C20", "D20", "E20", "A38",
     ]
     for coord in sample_coords:
         fc = fixture_ws[coord]
@@ -135,10 +135,14 @@ def test_more_items_than_fixture_shifts_rows_down(tmp_path, golden_invoice_input
 
     shift = 2  # two extra item rows
     assert ws.max_row == fixture_ws.max_row + shift
-    # Everything before the item table (fixed-position header/title/dates)
-    # stays put — only content after the (now longer) table shifts down.
-    assert ws["A16"].value == "PATIENT STATEMENT"
-    assert ws["A21"].value == "Service Date(s)"
-    assert ws[f"C{33 + shift}"].value == "YOUR PORTION DUE:"
-    assert ws[f"A{36 + shift}"].value == "_________________________________"
+    # Everything before and including the item table's header (fixed-
+    # position letterhead/stub/title/dates) stays put — the tear-off stub's
+    # YOUR PORTION DUE box now lives above the item table, so it no longer
+    # shifts with item count either (unlike before this layout change, when
+    # it lived below the table). Only content after the (now longer) table
+    # — the signature — shifts down.
+    assert ws["C19"].value == "YOUR PORTION DUE:"
+    assert ws["A23"].value == "PATIENT STATEMENT"
+    assert ws["A26"].value == "Service Date(s)"
+    assert ws[f"A{38 + shift}"].value == "_________________________________"
     assert ws.print_area.split("!")[-1] == f"$A$1:$E${fixture_ws.max_row + shift}"
