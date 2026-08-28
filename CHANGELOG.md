@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased] — Diagnosed: stub/QR code is correct, generated files were stale (2026-08-27)
+
+### Investigated — no code change in this entry
+
+#### 1. Reported symptom
+- `Asadullin_2026_Invoice_08282026.pdf`/`.xlsx`, generated after the tear-off stub + larger QR work (`14fde34`) and the envelope fix (`8e61a47`, `adb5993`) were committed, still showed the **old** layout: `STATEMENT DATE` below the title, `YOUR PORTION DUE` at the bottom, QR still ~0.9in at column C — none of the Part 1 changes present. The envelope, by contrast, *was* correctly fixed.
+
+#### 2. Ruled out: branch/merge/deploy gap in the code itself
+- `git branch -vv`: `main` is up to date with `origin/main`, no divergence, no unpushed local-only commits.
+- `git show origin/main:complete_patient_invoice_generator.py` and `...excel_invoice_generator.py`: the stub (`stub_table`), tear line (`"- - - - -  Detach and retain..."`), and resized QR (`qr_stub_size = 1.2 * inch`, `qr_clearance`/`qr_caption` row heights) are all present on `origin/main` — the branch Streamlit Cloud deploys from. This isn't a case of the work living on an unmerged feature branch.
+- Confirmed there is exactly **one** `PatientInvoiceGenerator` class and **one** `generate_excel_invoice()` function in the repo (`grep -rl` across all `.py` files) — no second/legacy generator code path is wired into `invoice_app.py` that could explain old output surviving alongside new code.
+- Regenerated the exact documented acceptance sample (Asadullin, 9 line items, $270 due) **locally, from this checkout, right now** — both PDF and Excel come out with the new layout: stub above `PATIENT STATEMENT` (Excel rows 18–22, before the title at row 25 — not the old post-title/post-totals positions), tear line present, `Zelle QR Code` caption present, QR anchored in the info block at the enlarged size. The code is correct and does what the changelog says it does.
+
+#### 3. Root cause: a long-running process serving stale imported code
+- `clinic_config.py`'s `load_clinic_config()` has no `st.cache_data`/`st.cache_resource` decorator (confirmed: no `st.cache` usage anywhere in the app) — every config/template file is read fresh from disk on every generation call. That's why the envelope fix (a **template file** swap) took effect immediately with no restart needed.
+- The tear-off stub and QR resize are **Python code** in `complete_patient_invoice_generator.py`/`excel_invoice_generator.py`, imported once by `invoice_app.py` at process start. Streamlit's dev-mode auto-rerun re-executes the main script on a file change, but it runs inside the **same Python process** — it does not re-import already-imported modules (they stay cached in `sys.modules`). A `streamlit run` process left running from before a `git pull`/checkout, or a Streamlit Cloud deployment that hasn't actually rebuilt/restarted its container since the latest push, will keep serving the old in-memory function bodies indefinitely — file changes on disk alone don't fix this, only an actual process restart does. This explains every observed symptom together: envelope fixed (config-driven, no restart needed) + invoice layout still old (code-driven, needs restart) + QR still ~0.9in (old code's hardcoded size, regardless of which image file `qr_image_path` now points to).
+
+#### 4. Next step (operational, not code)
+- **Local:** stop and restart the `streamlit run invoice_app.py` process (a hot-reload/rerun is not enough for changes to imported modules).
+- **Streamlit Cloud:** check *Manage app* → logs for the deployed commit SHA; if it's behind `adb5993`, use *Reboot app* to force a clean rebuild. Also re-confirm `[clinic_config]` in Secrets has `qr_image_path = "templates/zelle_qr_large.jpg"` and `show_qr = true` (independent of this issue, but same category of "config the running app doesn't automatically pick up" — see the DEPLOY.md entry from the previous session).
+- No code changes were made in this entry — there was nothing to fix in the generator code itself.
+
 ## [Unreleased] — Verify envelope generation + add regression guard (2026-08-27)
 
 ### Fixed / Investigated
