@@ -679,6 +679,21 @@ class PatientInvoiceGenerator:
                     combined_style.append(('ALIGN', (2, 0), (2, 0), 'CENTER'))
                     combined_style.append(('RIGHTPADDING', (1, 0), (1, 0), 6))
                     combined_style.append(('LEFTPADDING', (2, 0), (2, 0), 4))
+                    # Nudge the QR+caption up within its cell so it sits
+                    # tighter against the header instead of trailing well
+                    # below the (shorter) payment-instructions text. Scaled
+                    # to p['spacer_sections'] (the gap above this row, which
+                    # shrinks 20->10pt across the compression tiers) rather
+                    # than a fixed value — a fixed -15pt looked fine at the
+                    # loose tiers but measurably overlapped the WEBSITE line
+                    # at tier 5 (spacer_sections=10, used for longer
+                    # patients), caught by checking actual rendered
+                    # text/image coordinates, not just the common case.
+                    # A full ~1in/72pt shift (the original ask) would
+                    # overlap the header at every tier — only ~21pt of
+                    # natural clearance exists even at the loosest tier.
+                    qr_top_padding = -max(4, min(15, p['spacer_sections'] - 4))
+                    combined_style.append(('TOPPADDING', (2, 0), (2, 0), qr_top_padding))
 
                 combined_table = Table([combined_row], colWidths=combined_col_widths)
                 combined_table.setStyle(TableStyle(combined_style))

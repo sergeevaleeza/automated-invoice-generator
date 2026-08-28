@@ -263,7 +263,14 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
         # comment there for why 1.2in rather than the originally spec'd
         # 1.4in) so the two export formats stay visually consistent.
         qr_image.width = qr_image.height = round(1.2 * 96)
-        qr_image.anchor = f"C{info_row_start}"
+        # Anchored one row above the info box's own top (the blank
+        # spacer_after_contact row) rather than at info_row_start itself —
+        # nudges it up to sit tighter against the letterhead, matching the
+        # equivalent adjustment on the PDF side (see
+        # complete_patient_invoice_generator.py's qr_top_padding comment).
+        # That row is never used for anything else, so this can't overlap
+        # real content.
+        qr_image.anchor = f"C{info_row_start - 1}"
         ws.add_image(qr_image)
 
     row = info_row_end + 1

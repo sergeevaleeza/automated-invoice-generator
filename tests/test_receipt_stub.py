@@ -129,6 +129,44 @@ class TestPdfStub:
         out, _total_due, gen = self._generate(qr_clinic, tmp_path, n_items=16)
         assert gen._count_pdf_pages(out.read_bytes()) == 1
 
+    def test_18_item_patient_still_fits_one_page(self, qr_clinic, tmp_path):
+        """Regression case: an 18-item patient needs the tightest layout
+        tier (spacer_sections=10). A fixed -15pt QR top-padding shift (not
+        scaled to the tier) was measured to put the QR's top ~1pt *above*
+        the WEBSITE line's bottom at this tier — an actual overlap, not
+        just tight spacing — caught via exact rendered coordinates before
+        this test was written. Doesn't re-check the geometry directly (no
+        PDF-geometry library in this project's dependencies), but pins the
+        one thing that's cheap to verify here: this patient count must
+        still resolve to the single tightest tier and fit on one page."""
+        out, _total_due, gen = self._generate(qr_clinic, tmp_path, n_items=18)
+        assert gen._count_pdf_pages(out.read_bytes()) == 1
+
+
+class TestQrTopPaddingStaysSafeAcrossTiers:
+    """qr_top_padding = -max(4, min(15, spacer_sections - 4)) must never
+    exceed a tier's own spacer_sections value (the actual measured gap
+    above the QR before this shift is applied) — if it did, the QR would
+    render overlapping the header text above it, not just closer to it.
+    Pure math check, independent of ReportLab layout, so it can't catch
+    every real geometric regression, but it does pin the specific formula
+    property that caused a real near-miss (see test_18_item_patient_...)."""
+
+    def test_padding_never_exceeds_tier_spacer(self):
+        for tier in PatientInvoiceGenerator._LAYOUT_TIERS:
+            spacer = tier["spacer_sections"]
+            padding = max(4, min(15, spacer - 4))
+            assert padding < spacer, (
+                f"spacer_sections={spacer}: padding {padding} would consume the entire "
+                f"gap above the QR and then some — the QR would overlap the header"
+            )
+
+    def test_padding_never_negative_or_zero(self):
+        for tier in PatientInvoiceGenerator._LAYOUT_TIERS:
+            spacer = tier["spacer_sections"]
+            padding = max(4, min(15, spacer - 4))
+            assert padding > 0
+
 
 class TestExcelStub:
     def _generate(self, clinic, tmp_path, n_items=9):

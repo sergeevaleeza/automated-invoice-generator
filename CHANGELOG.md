@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased] — Nudge the top-block QR up (PDF + Excel) (2026-08-27)
+
+### Changed
+
+#### 1. QR moved closer to the header, capped by a real physical constraint
+- Requested as a ~1in/72pt upward shift so the QR's top aligns with the top of the patient-info/payment-instructions row (its caption was trailing visibly below the shorter payment-instructions text).
+- Measured via the actual rendered PDF's text/image coordinates before touching anything: at the loosest layout tier, the QR's top already sat only ~21pt below the letterhead's `WEBSITE:` line — nowhere near the ~72pt of clearance a full 1in shift would need. Applying the full request as literally specified would render the QR overlapping the header text, which the task's own constraints explicitly rule out.
+- Implemented the largest shift that stays clear of the header: `('TOPPADDING', (2, 0), (2, 0), qr_top_padding)` on the QR's table cell, where `qr_top_padding = -max(4, min(15, spacer_sections - 4))`. This nudges the QR ~6–15pt higher (scaled to the layout tier in effect — see #2) rather than the full 72pt, verified to leave 7–8.3pt of clearance from the header across every tier and patient length tested (9/12/14/16/18 line items). Short of the original ask, but it is the actual safe ceiling, not an arbitrary cut-down.
+- Excel: the QR's anchor moved from `C{info_row_start}` to `C{info_row_start - 1}` — one row-block higher, into the blank `spacer_after_contact` row directly above the info box, which is never used for anything else. Matches the PDF change in direction and spirit, per the "keep both formats consistent" instruction.
+
+#### 2. Fixed a real bug this surfaced: a fixed shift isn't safe across all layout tiers
+- The first implementation used a flat `-15pt` padding, verified safe at the common case (9-item Asadullin sample, tier 1: 8.1pt clearance) — but an 18-item patient needs the tightest compression tier (`spacer_sections` drops from 20pt down to 10pt across tiers), where the *same* -15pt shift measured out to the QR's top landing ~1pt *above* the `WEBSITE:` line's bottom: an actual overlap, not just a tight margin. Caught by re-measuring coordinates at a longer patient length rather than assuming the common case generalized. Fixed by scaling the padding to the active tier's `spacer_sections` instead of a constant.
+
+#### 3. Tests
+- Added to `tests/test_receipt_stub.py` (3 new tests, 18 total in the file): an 18-item patient (the exact case that exposed the fixed-padding bug) still fits one page, and `qr_top_padding`'s formula never exceeds a tier's own `spacer_sections` (pins the specific property whose absence caused the near-miss) across all six layout tiers. These are math/page-count checks, not a geometric-overlap assertion — this project has no PDF-geometry library in its dependencies, and adding one solely for this was judged more than the task's own "regenerate and eyeball" acceptance bar called for; the actual overlap-freedom claim above was verified by hand against exact rendered text/image coordinates, not just inferred from these tests. Full suite (113/113) and `AppTest` confirmed unaffected otherwise.
+
 ## [Unreleased] — Diagnosed: stub/QR code is correct, generated files were stale (2026-08-27)
 
 ### Investigated — no code change in this entry
