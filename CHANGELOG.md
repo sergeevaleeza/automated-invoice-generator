@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased] — Fix QR overflow onto PDF page 2, and Excel QR overlapping the header (2026-08-28)
+
+Three bugs surfaced by a real long/large-balance invoice (Balestieri), all stemming from the
+previous entry's QR-floating change.
+
+### Fixed
+
+#### 1. PDF — QR was drawn on every page, landing on top of page-2 content
+- `add_page_furniture()` was passed as both `onFirstPage` and `onLaterPages` to `doc.build()`, so the QR it draws repeated on every page. The QR is part of the top tear-off stub (page 1 only, conceptually) — on a genuinely long invoice that overflows to page 2, the continuation content (often SUBTOTAL/TOTAL/signature, which can start right at the top of the new page) rendered underneath a QR that had no business being there.
+- Split into two callbacks: `add_page_furniture()` now draws only the two-line footer (every page), and a new `add_first_page_furniture()` draws the QR + caption and then delegates to `add_page_furniture()` for the footer, so page 1 gets both and later pages get only the footer. `doc.build(story, onFirstPage=self.add_first_page_furniture, onLaterPages=self.add_page_furniture)`.
+
+#### 2. PDF — item table had no header row on overflow to page 2
+- `service_table` had no `repeatRows`, so on the rare invoice that genuinely can't fit one page even at the tightest layout tier, page 2 continued the item rows with no column headers. Added `repeatRows=1` to the `Table(...)` call so `Service Date(s)/Description/Amount Paid/Copay/Deductible` repeats at the top of the continuation page.
+- Verified the compression tiers themselves were never the problem: a 9-item (Asadullin) and up to a 22-item invoice both still fit one page at some tier, matching the existing test suite; genuine overflow only starts around ~26 items, which the tightest tier (5) legitimately can't compress further — that's expected, not a regression. (See `_LAYOUT_TIERS`/`_count_pdf_pages` — unchanged.)
+
+#### 3. Excel — QR overlapped the clinic header
+- The clinic header (rows 1–8ish) is a single merged, full-width, centered range — unlike the PDF's page, there's no clear top-right corner on the Excel sheet. Anchoring the QR at a fixed `E1` (the previous entry's fix) put it directly on top of the clinic name/address/EIN·NPI text.
+- Moved the anchor back into column C — the empty spacer column between the patient-address block (A:B) and the payment-notice box (D:E) — at `C{info_row_start}`, level with the top of that row block (i.e. below the entire header, not beside/inside the payment-instructions text, and clear of the stub row below it). Caption cell moved from column E to column C, at `info_row_end` (the last row of the — minimum 5-row — info block), directly beneath the image. This is the same column the QR occupied before the previous entry floated it to `E1`, but anchored to the info block's actual start row instead of a value tied to the old boxed-in-table layout.
+- Updated `tests/test_receipt_stub.py::TestExcelStub::test_qr_enlarged_and_captioned_when_enabled` and `tests/test_qr_code.py::TestExcelEmbedding::test_static_image_embedded_in_excel_when_enabled` (both asserted the old `E1`/`col==4` position) to the new `col==2` anchor, plus an added check that the anchor row sits below the header and above the stub row.
+
+### Added
+- `tests/test_receipt_stub.py::test_qr_appears_on_page_one_only` — generates a 30-item invoice (confirmed to genuinely overflow to 2 pages) and asserts the `Zelle QR Code` caption appears exactly once, not twice.
+- `tests/test_receipt_stub.py::test_overflow_table_header_repeats_on_page_two` — same 30-item fixture, asserts `Service Date` and `Copay/Deductible` each appear twice (once per page). Note: PDF string literals escape parens, so `"Service Date(s)"` is stored in the content stream as `Service Date\(s\)` — the test searches the parenless prefix instead of hitting a false negative against `_pdf_text()`'s naive decompression.
+
 ## [Unreleased] — Float the QR into the top-right corner; tighten the gap below it (2026-08-27)
 
 ### Changed

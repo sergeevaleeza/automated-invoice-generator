@@ -214,27 +214,6 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     set_row_height(row, heights["spacer_after_contact"])
     row += 1
 
-    # --- Zelle QR code: floats in the top-right corner, level with the
-    # clinic header, anchored at a fixed cell rather than tied to the
-    # patient/payment info box below. It used to be anchored in that box's
-    # column C, which meant its ~1.2in height needed dedicated clearance
-    # rows below to avoid bleeding into the stub row right after it —
-    # floating it up here removes the need for that gap entirely. Matches
-    # the PDF's positioning (see add_page_furniture() there).
-    if cfg.get("qr_image_bytes"):
-        qr_buf = BytesIO(cfg["qr_image_bytes"])
-        qr_image = XLImage(qr_buf)
-        # openpyxl sizes images in pixels at a 96dpi assumption when
-        # converting to the saved anchor's EMU extent (verified empirically:
-        # 65px round-tripped to 0.677in, not the 0.9in intended).
-        qr_image.width = qr_image.height = round(1.2 * 96)
-        qr_image.anchor = "E1"
-        ws.add_image(qr_image)
-        qr_caption_row = row - 1  # the blank spacer_after_contact row, directly beneath the QR
-        qr_caption_font = Font(name=cfg["font_family"], size=8, italic=True)
-        ws.cell(row=qr_caption_row, column=5, value="Zelle QR Code").font = qr_caption_font
-        ws.cell(row=qr_caption_row, column=5).alignment = center
-
     # --- Patient address block (A:B) + payment notice box (D:E), column C is a spacer ---
     display_postal = _clean_postal_code(patient.postal_code)
     patient_lines = [f"{patient.first_name.upper()} {patient.last_name.upper()}"]
@@ -263,6 +242,33 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     # No border on the payment-notice box — matches the approved fixture exactly.
     for r in range(info_row_start, info_row_end + 1):
         set_row_height(r, heights["info_box"])
+
+    # --- Zelle QR code: anchored in column C, the empty spacer column
+    # between the patient-address block (A:B) and the payment-notice box
+    # (D:E), level with the top of that row block. NOT the top-right
+    # corner (column E / row 1) — the clinic header above (rows 1-8ish) is
+    # merged full-width and centered, so unlike the PDF's page, there is no
+    # clear top-right corner here; anchoring there put the QR on top of the
+    # header/address/EIN-NPI text. Column C has no content anywhere in this
+    # row block, so this placement can't collide with the header above, the
+    # payment-instructions text beside it (D:E), or the stub row below.
+    if cfg.get("qr_image_bytes"):
+        qr_buf = BytesIO(cfg["qr_image_bytes"])
+        qr_image = XLImage(qr_buf)
+        # openpyxl sizes images in pixels at a 96dpi assumption when
+        # converting to the saved anchor's EMU extent (verified empirically:
+        # 65px round-tripped to 0.677in, not the 0.9in intended).
+        qr_image.width = qr_image.height = round(1.2 * 96)
+        qr_image.anchor = f"C{info_row_start}"
+        ws.add_image(qr_image)
+        # Directly beneath the image, at the last row of the (5-row-minimum)
+        # info block — approximate by design (the image is pixel-positioned
+        # independent of row snapping); tuned against the saved drawing
+        # XML's EMU offset, not just the anchor cell.
+        qr_caption_row = info_row_end
+        qr_caption_font = Font(name=cfg["font_family"], size=8, italic=True)
+        ws.cell(row=qr_caption_row, column=3, value="Zelle QR Code").font = qr_caption_font
+        ws.cell(row=qr_caption_row, column=3).alignment = center
 
     row = info_row_end + 1
     set_row_height(row, heights["spacer_after_info"])

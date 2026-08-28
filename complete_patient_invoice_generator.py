@@ -750,7 +750,8 @@ class PatientInvoiceGenerator:
 
                 service_table = Table(
                     table_data,
-                    colWidths=[1.5 * inch, 2.5 * inch, 1.2 * inch, 1.3 * inch]
+                    colWidths=[1.5 * inch, 2.5 * inch, 1.2 * inch, 1.3 * inch],
+                    repeatRows=1
                 )
                 service_table.setStyle(TableStyle([
                     # Header row
@@ -787,7 +788,7 @@ class PatientInvoiceGenerator:
                 story.append(Spacer(1, 8))
                 story.append(Paragraph(f"Provider Signature - {self.clinic['provider_name_for_signature']}", signature_style))
 
-                doc.build(story, onFirstPage=self.add_page_furniture, onLaterPages=self.add_page_furniture)
+                doc.build(story, onFirstPage=self.add_first_page_furniture, onLaterPages=self.add_page_furniture)
                 return buf.getvalue()
 
             # Try each layout tier until content fits on one page
@@ -808,26 +809,47 @@ class PatientInvoiceGenerator:
             raise
 
     def add_page_furniture(self, canvas, doc):
-        """Add the two-line footer centered at the bottom of each page, and
-        the Zelle QR code (+ caption) floating in the top-right corner,
-        level with the clinic header.
+        """Add the two-line footer centered at the bottom of every page.
 
-        The QR is drawn here — as an absolutely-positioned image, not a
-        flowable in the story — rather than as a cell in the patient/
-        payment info table (an earlier iteration) or the page-corner
-        footer (the original, before that): as a table cell, its height
-        forced that whole row taller than the patient/payment text alone
-        needed, costing single-page headroom on every invoice; in the
-        footer at the originally spec'd ~1.4in, it measurably overlapped
-        the provider signature block for longer patients at the tightest
-        layout tier. Floating it here, out of the flowable frame entirely,
-        means its footprint can't push any flowable content around or
-        collide with it — the position is fixed once, independent of how
-        much the story above/below it grows."""
+        Deliberately does NOT draw the QR — see add_first_page_furniture().
+        The QR is part of the top tear-off stub, which only exists once per
+        invoice; drawing it here too (as this method used to, before it was
+        split) meant it repeated on every page, including page 2+ of longer
+        invoices, where it visually landed on top of whatever continuation
+        content (often SUBTOTAL/TOTAL/signature) started at the top of that
+        page."""
+        canvas.saveState()
+        page_width = letter[0]
+        font_size = 8
+        canvas.setFont("Helvetica", font_size)
+
+        line1 = f"If you have questions regarding your bill, please contact us at {self.clinic['phone']}."
+        line2 = f"For current pricing, please visit: {self.clinic['pricing_page_url']}"
+
+        line1_width = canvas.stringWidth(line1, "Helvetica", font_size)
+        line2_width = canvas.stringWidth(line2, "Helvetica", font_size)
+
+        x1 = (page_width - line1_width) / 2
+        x2 = (page_width - line2_width) / 2
+
+        canvas.drawString(x1, 0.55 * inch, line1)
+        canvas.drawString(x2, 0.35 * inch, line2)
+
+        canvas.restoreState()
+
+    def add_first_page_furniture(self, canvas, doc):
+        """Page-1-only furniture: the floating Zelle QR code (+ caption) in
+        the top-right corner, level with the clinic header, plus the same
+        footer every other page gets.
+
+        The QR belongs to the tear-off stub at the top of page 1 only — it
+        must not repeat on later pages (see add_page_furniture()'s
+        docstring for the page-2 overlap this used to cause on longer
+        invoices). Passed to doc.build() as onFirstPage while
+        add_page_furniture is onLaterPages."""
         canvas.saveState()
         page_width = letter[0]
         top_margin = 0.4 * inch
-        right_margin = 0.65 * inch
 
         qr_bytes = resolve_qr_image_bytes(self.clinic)
         if qr_bytes:
@@ -846,22 +868,8 @@ class PatientInvoiceGenerator:
             canvas.setFont("Helvetica", 7)
             canvas.drawCentredString(qr_x + qr_size / 2, qr_y - 9, "Zelle QR Code")
 
-        font_size = 8
-        canvas.setFont("Helvetica", font_size)
-
-        line1 = f"If you have questions regarding your bill, please contact us at {self.clinic['phone']}."
-        line2 = f"For current pricing, please visit: {self.clinic['pricing_page_url']}"
-
-        line1_width = canvas.stringWidth(line1, "Helvetica", font_size)
-        line2_width = canvas.stringWidth(line2, "Helvetica", font_size)
-
-        x1 = (page_width - line1_width) / 2
-        x2 = (page_width - line2_width) / 2
-
-        canvas.drawString(x1, 0.55 * inch, line1)
-        canvas.drawString(x2, 0.35 * inch, line2)
-
         canvas.restoreState()
+        self.add_page_furniture(canvas, doc)
 
     def _generate_cover_letter(self, patient: PatientData, template_file: str, output_path: Path):
         """Generate cover letter DOCX from template"""

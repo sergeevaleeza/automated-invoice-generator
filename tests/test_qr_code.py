@@ -142,10 +142,12 @@ class TestExcelEmbedding:
         self._generate(clinic, out_path)
         ws = load_workbook(out_path).active
         assert len(ws._images) == 1
-        # Anchored at E1 — top-right corner, level with the clinic header —
-        # not tied to the patient/payment info box below it.
-        assert ws._images[0].anchor._from.col == 4
-        assert ws._images[0].anchor._from.row == 0
+        # Anchored in column C (the spacer column between the patient-
+        # address block and the payment-notice box), level with the top of
+        # that row block — NOT the top-right corner, which collides with
+        # the merged, full-width, centered clinic header above it.
+        assert ws._images[0].anchor._from.col == 2
+        assert ws._images[0].anchor._from.row == 9
 
     def test_generated_qr_embedded_in_excel_when_no_static_image(self, tmp_path):
         from openpyxl import load_workbook

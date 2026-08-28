@@ -150,7 +150,33 @@ class TestPdfStub:
         gen = PatientInvoiceGenerator(amount_due_strategy="auto", statement_date="2026-07-17",
                                        clinic_config=qr_clinic)
         assert hasattr(gen, "add_page_furniture")
+        assert hasattr(gen, "add_first_page_furniture")
         assert not hasattr(gen, "add_optimized_footer")
+
+    def test_qr_appears_on_page_one_only(self, qr_clinic, tmp_path):
+        """A long enough invoice to genuinely overflow to page 2 (the QR
+        floats independently of the layout-tier compression, so no amount
+        of items keeps this on one page forever) must show the QR/caption
+        exactly once — on page 1. It used to be drawn by the same callback
+        for every page, so it visually landed on top of whatever
+        continuation content (often SUBTOTAL/TOTAL/signature) started at
+        the top of page 2."""
+        out, _total_due, gen = self._generate(qr_clinic, tmp_path, n_items=30)
+        assert gen._count_pdf_pages(out.read_bytes()) == 2
+        text = _pdf_text(out.read_bytes())
+        assert text.count(b"Zelle QR Code") == 1
+
+    def test_overflow_table_header_repeats_on_page_two(self, qr_clinic, tmp_path):
+        """For a genuinely long patient that can't fit one page even at the
+        tightest layout tier, the item table's header row must repeat on
+        the continuation page rather than leaving page 2 headerless."""
+        out, _total_due, gen = self._generate(qr_clinic, tmp_path, n_items=30)
+        assert gen._count_pdf_pages(out.read_bytes()) == 2
+        text = _pdf_text(out.read_bytes())
+        # PDF string literals escape parens, so "Service Date(s)" is stored
+        # as "Service Date\(s\)" — search the unambiguous parenless prefix.
+        assert text.count(b"Service Date") == 2
+        assert text.count(b"Copay/Deductible") == 2
 
 
 class TestExcelStub:
@@ -210,12 +236,22 @@ class TestExcelStub:
         out, _ = self._generate(qr_clinic, tmp_path)
         ws = load_workbook(out).active
         assert len(ws._images) == 1
-        # E1: top-right corner, level with the clinic header — floated out
-        # of the patient/payment info box (see excel_invoice_generator.py).
-        assert ws._images[0].anchor._from.col == 4
-        assert ws._images[0].anchor._from.row == 0
+        # Column C (index 2): the spacer column between the patient-address
+        # block (A:B) and the payment-notice box (D:E) — not the top-right
+        # corner, which collides with the merged, full-width, centered
+        # clinic header. Anchor row must be at/after the row the patient
+        # info block starts on, not up in the header rows.
+        assert ws._images[0].anchor._from.col == 2
+        stmt_date_row = self._cell_row(ws, "STATEMENT DATE:")
+        qr_anchor_row_1indexed = ws._images[0].anchor._from.row + 1
+        assert qr_anchor_row_1indexed > 8, "QR must not sit up in the clinic header rows"
+        assert qr_anchor_row_1indexed < stmt_date_row, "QR must not sit at/below the stub row"
+
         caption_row = self._cell_row(ws, "Zelle QR Code")
         assert caption_row is not None
+        # Caption lives in column C too, directly beneath the image — not
+        # column E, which is inside the payment-instructions merge.
+        assert ws.cell(row=caption_row, column=3).value == "Zelle QR Code"
 
         with zipfile.ZipFile(out) as z:
             drawing_xml = z.read("xl/drawings/drawing1.xml").decode()
