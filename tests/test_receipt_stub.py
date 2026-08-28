@@ -129,43 +129,28 @@ class TestPdfStub:
         out, _total_due, gen = self._generate(qr_clinic, tmp_path, n_items=16)
         assert gen._count_pdf_pages(out.read_bytes()) == 1
 
-    def test_18_item_patient_still_fits_one_page(self, qr_clinic, tmp_path):
-        """Regression case: an 18-item patient needs the tightest layout
-        tier (spacer_sections=10). A fixed -15pt QR top-padding shift (not
-        scaled to the tier) was measured to put the QR's top ~1pt *above*
-        the WEBSITE line's bottom at this tier — an actual overlap, not
-        just tight spacing — caught via exact rendered coordinates before
-        this test was written. Doesn't re-check the geometry directly (no
-        PDF-geometry library in this project's dependencies), but pins the
-        one thing that's cheap to verify here: this patient count must
-        still resolve to the single tightest tier and fit on one page."""
-        out, _total_due, gen = self._generate(qr_clinic, tmp_path, n_items=18)
+    def test_22_item_patient_still_fits_one_page(self, qr_clinic, tmp_path):
+        """The QR used to be a flowable cell in the patient/payment table,
+        where a fixed-vs-tier-scaled top-padding bug once caused a real
+        near-miss with the header at 18 items (see CHANGELOG). It's now
+        drawn as an absolutely-positioned image outside the flowable frame
+        entirely (add_page_furniture()), so it can no longer inflate that
+        row's height or interact with the layout-tier system at all — the
+        old failure mode is structurally gone, not just patched. Single-
+        page capacity actually grew as a result (up to ~22 items, vs ~18
+        with the QR still in the table)."""
+        out, _total_due, gen = self._generate(qr_clinic, tmp_path, n_items=22)
         assert gen._count_pdf_pages(out.read_bytes()) == 1
 
-
-class TestQrTopPaddingStaysSafeAcrossTiers:
-    """qr_top_padding = -max(4, min(15, spacer_sections - 4)) must never
-    exceed a tier's own spacer_sections value (the actual measured gap
-    above the QR before this shift is applied) — if it did, the QR would
-    render overlapping the header text above it, not just closer to it.
-    Pure math check, independent of ReportLab layout, so it can't catch
-    every real geometric regression, but it does pin the specific formula
-    property that caused a real near-miss (see test_18_item_patient_...)."""
-
-    def test_padding_never_exceeds_tier_spacer(self):
-        for tier in PatientInvoiceGenerator._LAYOUT_TIERS:
-            spacer = tier["spacer_sections"]
-            padding = max(4, min(15, spacer - 4))
-            assert padding < spacer, (
-                f"spacer_sections={spacer}: padding {padding} would consume the entire "
-                f"gap above the QR and then some — the QR would overlap the header"
-            )
-
-    def test_padding_never_negative_or_zero(self):
-        for tier in PatientInvoiceGenerator._LAYOUT_TIERS:
-            spacer = tier["spacer_sections"]
-            padding = max(4, min(15, spacer - 4))
-            assert padding > 0
+    def test_qr_drawn_via_page_furniture_not_story_table(self, qr_clinic, tmp_path):
+        """The QR must be produced by the page-level canvas callback, not
+        as content inside the flowable story — guards against the QR
+        silently moving back into the patient/payment table (the source of
+        the row-height/collision issues fixed by floating it out)."""
+        gen = PatientInvoiceGenerator(amount_due_strategy="auto", statement_date="2026-07-17",
+                                       clinic_config=qr_clinic)
+        assert hasattr(gen, "add_page_furniture")
+        assert not hasattr(gen, "add_optimized_footer")
 
 
 class TestExcelStub:
@@ -225,7 +210,10 @@ class TestExcelStub:
         out, _ = self._generate(qr_clinic, tmp_path)
         ws = load_workbook(out).active
         assert len(ws._images) == 1
-        assert ws._images[0].anchor._from.col == 2
+        # E1: top-right corner, level with the clinic header — floated out
+        # of the patient/payment info box (see excel_invoice_generator.py).
+        assert ws._images[0].anchor._from.col == 4
+        assert ws._images[0].anchor._from.row == 0
         caption_row = self._cell_row(ws, "Zelle QR Code")
         assert caption_row is not None
 

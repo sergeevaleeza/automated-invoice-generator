@@ -57,12 +57,6 @@ LAYOUT_CONFIG = {
         info_box=15, spacer_after_info=12, title=20.1, spacer_after_title=6,
         statement=15, spacer_after_statement=12, item_header=18, item=15,
         spacer_after_items=12, amount_box=17.1, signature=15,
-        # QR clearance/caption: the enlarged QR (anchored at column C in the
-        # info box, see _build_workbook) is taller than the info box's 5
-        # rows, so it needs deliberate room below to clear before the
-        # stub's own column-C labels start (see the QR sizing comment
-        # there for the math) — otherwise the two would visually overlap.
-        qr_clearance=20, qr_caption=14,
         # Tear-off stub row: patients tear off the top of the page and keep
         # it as a receipt, so STATEMENT DATE/Payment due date and YOUR
         # PORTION DUE/AMOUNT ENCLOSED live here, stacked, above the
@@ -220,6 +214,27 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     set_row_height(row, heights["spacer_after_contact"])
     row += 1
 
+    # --- Zelle QR code: floats in the top-right corner, level with the
+    # clinic header, anchored at a fixed cell rather than tied to the
+    # patient/payment info box below. It used to be anchored in that box's
+    # column C, which meant its ~1.2in height needed dedicated clearance
+    # rows below to avoid bleeding into the stub row right after it —
+    # floating it up here removes the need for that gap entirely. Matches
+    # the PDF's positioning (see add_page_furniture() there).
+    if cfg.get("qr_image_bytes"):
+        qr_buf = BytesIO(cfg["qr_image_bytes"])
+        qr_image = XLImage(qr_buf)
+        # openpyxl sizes images in pixels at a 96dpi assumption when
+        # converting to the saved anchor's EMU extent (verified empirically:
+        # 65px round-tripped to 0.677in, not the 0.9in intended).
+        qr_image.width = qr_image.height = round(1.2 * 96)
+        qr_image.anchor = "E1"
+        ws.add_image(qr_image)
+        qr_caption_row = row - 1  # the blank spacer_after_contact row, directly beneath the QR
+        qr_caption_font = Font(name=cfg["font_family"], size=8, italic=True)
+        ws.cell(row=qr_caption_row, column=5, value="Zelle QR Code").font = qr_caption_font
+        ws.cell(row=qr_caption_row, column=5).alignment = center
+
     # --- Patient address block (A:B) + payment notice box (D:E), column C is a spacer ---
     display_postal = _clean_postal_code(patient.postal_code)
     patient_lines = [f"{patient.first_name.upper()} {patient.last_name.upper()}"]
@@ -249,43 +264,7 @@ def _build_workbook(patient: PatientData, total_due: float, patient_df: pd.DataF
     for r in range(info_row_start, info_row_end + 1):
         set_row_height(r, heights["info_box"])
 
-    if cfg.get("qr_image_bytes"):
-        # Column C is a deliberate spacer between the patient-address and
-        # payment-notice boxes — always blank, regardless of how many rows
-        # the boxes span — so a floating image anchored there can't overlap
-        # existing text or disturb the tested grid/merge/print-area layout.
-        qr_buf = BytesIO(cfg["qr_image_bytes"])
-        qr_image = XLImage(qr_buf)
-        # openpyxl sizes images in pixels at a 96dpi assumption when
-        # converting to the saved anchor's EMU extent (verified empirically:
-        # 65px round-tripped to 0.677in, not the 0.9in intended) — matches
-        # the PDF's QR sizing (see complete_patient_invoice_generator.py's
-        # comment there for why 1.2in rather than the originally spec'd
-        # 1.4in) so the two export formats stay visually consistent.
-        qr_image.width = qr_image.height = round(1.2 * 96)
-        # Anchored one row above the info box's own top (the blank
-        # spacer_after_contact row) rather than at info_row_start itself —
-        # nudges it up to sit tighter against the letterhead, matching the
-        # equivalent adjustment on the PDF side (see
-        # complete_patient_invoice_generator.py's qr_top_padding comment).
-        # That row is never used for anything else, so this can't overlap
-        # real content.
-        qr_image.anchor = f"C{info_row_start - 1}"
-        ws.add_image(qr_image)
-
     row = info_row_end + 1
-    if cfg.get("qr_image_bytes"):
-        # Extra clearance below the info box: the enlarged QR (anchored at
-        # column C, ~1.2in tall) is taller than the info box's 5 rows, so
-        # without this it would visually bleed into the stub's own
-        # column-C labels directly below.
-        set_row_height(row, heights["qr_clearance"])
-        row += 1
-        qr_caption_font = Font(name=cfg["font_family"], size=8, italic=True)
-        ws.cell(row=row, column=3, value="Zelle QR Code").font = qr_caption_font
-        ws.cell(row=row, column=3).alignment = center
-        set_row_height(row, heights["qr_caption"])
-        row += 1
     set_row_height(row, heights["spacer_after_info"])
     row += 1
 

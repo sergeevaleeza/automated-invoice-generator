@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased] — Float the QR into the top-right corner; tighten the gap below it (2026-08-27)
+
+### Changed
+
+#### 1. QR is no longer part of the patient/payment table — it floats independently, top-right
+- Supersedes the previous entry's in-row QR placement. The QR (+ `Zelle QR Code` caption) now renders as an absolutely-positioned image in the top-right corner, roughly level with the clinic header — not a cell in the patient/payment info table, and not tied to any flowable content at all.
+- **PDF**: moved from a `Table` cell to `canvas.drawImage()` inside the page-furniture callback (renamed `add_optimized_footer` → `add_page_furniture`, since it now draws page-level content at both the top and bottom of every page, not just a footer). Anchored to the top-right corner using a *tighter* right margin (0.3in) than the body text's 0.65in — checked via rendered coordinates, the `OFFICE ADDRESS` header line can run to within ~3pt of the body margin, which isn't enough clearance from the QR at 0.65in; since the QR floats independently of the body frame, it can safely use more of the page's true right edge instead of fighting that line for space. Verified clearance: ~28.5pt between the QR and the nearest header text at 0.3in.
+- **Excel**: QR anchor moved from `C{info_row_start}` (inside the patient/payment info box) to a fixed `E1` (top-right corner, level with the clinic name line), with its caption moved to the row directly beneath (the blank `spacer_after_contact` row). The dedicated `qr_clearance`/`qr_caption` extra rows added in the previous entry specifically to give the boxed-in QR room to clear the stub below are gone — floating the QR out of that area removes the need for them entirely.
+
+#### 2. Side effect: closes the gap below the patient/payment block, and grows single-page capacity
+- Since the QR no longer needs to be a cell in the patient/payment table, that row collapses to text height instead of the QR's ~1.2in — this is what closes the visual gap the previous entry's positioning left. PDF: the `Spacer` between that block and the stub row shrunk from `spacer_small` (15–20pt, tier-dependent) to the smaller `spacer_header` (4–8pt). Excel: the stub now starts ~2 rows earlier than with the boxed-in QR.
+- This also **removes the entire class of tier-scaling bug fixed in the previous entry** (a fixed shift needed to be scaled per layout tier to avoid overlapping the header) — not by re-tuning the fix, but because the mechanism that caused it (the QR inflating a shared row's height, competing with the header for space above it) no longer exists. Single-page capacity grew as a result too: up to ~22 line items at maximum compression now fit on one page (previously ~18 with the QR still in the table).
+
+#### 3. Tests
+- Updated `tests/test_qr_code.py` and `tests/test_receipt_stub.py`'s Excel anchor assertions from column C (index 2) to `E1` (col 4, row 0). Removed `tests/test_receipt_stub.py`'s `TestQrTopPaddingStaysSafeAcrossTiers` class and its accompanying 18-item regression test — both described a fix for a bug in code that no longer exists (the `qr_top_padding`/tier-scaling logic was deleted, not adjusted), so keeping them would have been actively misleading about the current implementation. Replaced with a 22-item single-page-fit test (the new, higher capacity ceiling) and a test asserting the QR is produced by `add_page_furniture()` rather than being reintroduced as a table cell. Full suite (112/112) and `AppTest` confirmed unaffected otherwise; regenerated the Asadullin sample (9 items, $270 due) through the full `generate_invoices()` pipeline and visually confirmed against the spec — QR top-right near the header, patient/payment block sitting close to the stub, tear line/table/totals/signature unchanged, one page.
+
 ## [Unreleased] — Nudge the top-block QR up (PDF + Excel) (2026-08-27)
 
 ### Changed

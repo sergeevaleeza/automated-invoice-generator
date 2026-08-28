@@ -20,7 +20,7 @@ from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image as RLImage
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from reportlab.lib.utils import ImageReader
@@ -637,68 +637,32 @@ class PatientInvoiceGenerator:
                     f"   {self.clinic['mailing_address']}"
                 )
 
-                combined_row = [patient_info_text, payment_info_text]
-                combined_col_widths = [3 * inch, 3 * inch]
-                combined_style = [
+                # QR code (config: show_qr / qr_image_path / qr_content — see
+                # qr_code.py) is NOT a cell in this table — it's drawn as an
+                # absolutely-positioned image in the top-right corner, level
+                # with the clinic header, by add_page_furniture() below.
+                # It previously lived as a third column here, but that made
+                # this row's height follow the image (taller than the
+                # patient/payment text alone needs) — floating it out lets
+                # this row collapse to text height, which is also what
+                # closes the gap before the stub row right below.
+                combined_table = Table(
+                    [[patient_info_text, payment_info_text]], colWidths=[3 * inch, 3 * inch]
+                )
+                combined_table.setStyle(TableStyle([
                     ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
                     ('FONTNAME', (1, 0), (1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, -1), p['font_body']),
                     ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                     ('LEFTPADDING', (0, 0), (-1, -1), 0),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                ]
-
-                # QR code (config: show_qr / qr_image_path / qr_content —
-                # see qr_code.py) lives here as a third column rather than
-                # the page-corner footer it used to be in: at the originally
-                # spec'd ~1.4in it measurably overlapped the provider
-                # signature block for longer patients in the footer's fixed
-                # bottom margin (see add_optimized_footer's docstring), so
-                # it moved somewhere its footprint can't collide with
-                # variable-length content. Sized at 1.2in rather than the
-                # full 1.4in for the same reason in this new spot: the
-                # image's height sets this row's height (taller than the
-                # patient/payment text alone needs), so every extra 0.1in
-                # here costs page space on every invoice — 1.2in keeps
-                # single-page fit working through ~18 line items at maximum
-                # compression (1.4in dropped that ceiling to ~16) while
-                # still being noticeably larger than the original 0.9in.
-                qr_bytes = resolve_qr_image_bytes(self.clinic)
-                if qr_bytes:
-                    qr_stub_size = 1.2 * inch
-                    qr_caption_style = ParagraphStyle(
-                        'QRCaption', parent=styles['Normal'], fontSize=7,
-                        alignment=TA_CENTER, fontName='Helvetica'
-                    )
-                    qr_cell = [
-                        RLImage(BytesIO(qr_bytes), width=qr_stub_size, height=qr_stub_size),
-                        Paragraph("Zelle QR Code", qr_caption_style),
-                    ]
-                    combined_row = [patient_info_text, payment_info_text, qr_cell]
-                    combined_col_widths = [2.3 * inch, 3.3 * inch, 1.6 * inch]
-                    combined_style.append(('ALIGN', (2, 0), (2, 0), 'CENTER'))
-                    combined_style.append(('RIGHTPADDING', (1, 0), (1, 0), 6))
-                    combined_style.append(('LEFTPADDING', (2, 0), (2, 0), 4))
-                    # Nudge the QR+caption up within its cell so it sits
-                    # tighter against the header instead of trailing well
-                    # below the (shorter) payment-instructions text. Scaled
-                    # to p['spacer_sections'] (the gap above this row, which
-                    # shrinks 20->10pt across the compression tiers) rather
-                    # than a fixed value — a fixed -15pt looked fine at the
-                    # loose tiers but measurably overlapped the WEBSITE line
-                    # at tier 5 (spacer_sections=10, used for longer
-                    # patients), caught by checking actual rendered
-                    # text/image coordinates, not just the common case.
-                    # A full ~1in/72pt shift (the original ask) would
-                    # overlap the header at every tier — only ~21pt of
-                    # natural clearance exists even at the loosest tier.
-                    qr_top_padding = -max(4, min(15, p['spacer_sections'] - 4))
-                    combined_style.append(('TOPPADDING', (2, 0), (2, 0), qr_top_padding))
-
-                combined_table = Table([combined_row], colWidths=combined_col_widths)
-                combined_table.setStyle(TableStyle(combined_style))
+                ]))
                 story.append(combined_table)
-                story.append(Spacer(1, p['spacer_small']))
+                # Small, fixed gap rather than p['spacer_small'] (used
+                # elsewhere for a bigger visual break) — now that the QR no
+                # longer inflates this row, the patient/payment block and
+                # the stub row below it should sit close together.
+                story.append(Spacer(1, p['spacer_header']))
 
                 # --- Tear-off stub: STATEMENT DATE / Payment due date and
                 # YOUR PORTION DUE / AMOUNT ENCLOSED, side by side above the
@@ -823,7 +787,7 @@ class PatientInvoiceGenerator:
                 story.append(Spacer(1, 8))
                 story.append(Paragraph(f"Provider Signature - {self.clinic['provider_name_for_signature']}", signature_style))
 
-                doc.build(story, onFirstPage=self.add_optimized_footer, onLaterPages=self.add_optimized_footer)
+                doc.build(story, onFirstPage=self.add_page_furniture, onLaterPages=self.add_page_furniture)
                 return buf.getvalue()
 
             # Try each layout tier until content fits on one page
@@ -843,28 +807,50 @@ class PatientInvoiceGenerator:
             self.logger.error(f"Error generating PDF invoice: {e}")
             raise
 
-    def add_optimized_footer(self, canvas, doc):
-        """Add two-line footer centered at the bottom of each page.
+    def add_page_furniture(self, canvas, doc):
+        """Add the two-line footer centered at the bottom of each page, and
+        the Zelle QR code (+ caption) floating in the top-right corner,
+        level with the clinic header.
 
-        The QR code (config: show_qr / qr_image_path / qr_content — see
-        qr_code.py) is NOT drawn here — it lives in the patient/payment info
-        block near the top of the page instead (see the story-building code
-        above). It used to be a page-corner canvas draw down here, but at
-        the enlarged ~1.4in size it measurably overlapped the provider
-        signature block for longer patients (verified: 20 line items at the
-        tightest layout tier puts the signature text inside the QR's
-        bounding box). The footer's fixed bottom margin can't grow enough
-        to prevent that without costing significant single-page headroom,
-        so the QR moved somewhere its footprint can't collide with
-        variable-length content."""
+        The QR is drawn here — as an absolutely-positioned image, not a
+        flowable in the story — rather than as a cell in the patient/
+        payment info table (an earlier iteration) or the page-corner
+        footer (the original, before that): as a table cell, its height
+        forced that whole row taller than the patient/payment text alone
+        needed, costing single-page headroom on every invoice; in the
+        footer at the originally spec'd ~1.4in, it measurably overlapped
+        the provider signature block for longer patients at the tightest
+        layout tier. Floating it here, out of the flowable frame entirely,
+        means its footprint can't push any flowable content around or
+        collide with it — the position is fixed once, independent of how
+        much the story above/below it grows."""
         canvas.saveState()
+        page_width = letter[0]
+        top_margin = 0.4 * inch
+        right_margin = 0.65 * inch
+
+        qr_bytes = resolve_qr_image_bytes(self.clinic)
+        if qr_bytes:
+            qr_size = 1.2 * inch
+            # Tighter right margin than the body text's 0.65in — checked via
+            # rendered coordinates, the "OFFICE ADDRESS" header line can run
+            # to within ~3pt of the body margin, which isn't enough gap from
+            # the QR at 0.65in. The QR floats independently of the body
+            # frame anyway, so it can safely use more of the page's true
+            # right edge instead of fighting that line for space.
+            qr_right_margin = 0.3 * inch
+            qr_x = page_width - qr_right_margin - qr_size
+            qr_y = letter[1] - top_margin - qr_size
+            canvas.drawImage(ImageReader(BytesIO(qr_bytes)), qr_x, qr_y,
+                              width=qr_size, height=qr_size, mask='auto')
+            canvas.setFont("Helvetica", 7)
+            canvas.drawCentredString(qr_x + qr_size / 2, qr_y - 9, "Zelle QR Code")
+
         font_size = 8
         canvas.setFont("Helvetica", font_size)
 
         line1 = f"If you have questions regarding your bill, please contact us at {self.clinic['phone']}."
         line2 = f"For current pricing, please visit: {self.clinic['pricing_page_url']}"
-
-        page_width = letter[0]
 
         line1_width = canvas.stringWidth(line1, "Helvetica", font_size)
         line2_width = canvas.stringWidth(line2, "Helvetica", font_size)
