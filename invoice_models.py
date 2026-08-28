@@ -13,13 +13,21 @@ import re
 
 import pandas as pd
 
-# Placeholders the cover-letter DOCX template must contain, in the same
-# order _generate_cover_letter() fills them in. Single source of truth for
-# both the replacement logic and template validation.
+# Placeholders the envelope DOCX template must contain, in the same order
+# _generate_cover_letter() fills them in. Single source of truth for both
+# the replacement logic and template validation.
+#
+# This is the delivery-address field set only — confirmed with the clinic
+# that the *_Envelope.docx output is the only piece of correspondence in
+# this slot (no separate cover letter), so there's no "Dear [Full Name],"
+# salutation or "[Patient Record Number]" reference to require here. Those
+# two placeholders were dropped from this list (and from the substitution
+# in _generate_cover_letter()) since the bundled template doesn't use them
+# and requiring them just produced a stale "missing placeholders" warning
+# for an otherwise-correct template.
 REQUIRED_TEMPLATE_PLACEHOLDERS = [
-    '[First Name]', '[Last Name]', '[Full Name]',
-    '[Address Line 1]', '[Address Line 2]', '[City]', '[State]',
-    '[Postal Code]', '[Patient Record Number]',
+    '[First Name]', '[Last Name]',
+    '[Address Line 1]', '[Address Line 2]', '[City]', '[State]', '[Postal Code]',
 ]
 
 # Escalating notice levels for a patient flagged as a possible duplicate

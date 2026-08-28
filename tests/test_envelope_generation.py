@@ -108,6 +108,17 @@ class TestEnvelopeContent:
             assert forbidden not in text, f"{forbidden!r} should not appear in an envelope"
 
 
+def test_bundled_template_validates_clean():
+    """The bundled default template is envelope-only (confirmed with the
+    clinic: no separate cover letter). REQUIRED_TEMPLATE_PLACEHOLDERS must
+    match what it actually contains — [Full Name]/[Patient Record Number]
+    don't belong in an envelope's delivery address, and requiring them
+    produced a stale "missing placeholders" warning in the UI for an
+    otherwise-correct template."""
+    from invoice_models import validate_cover_letter_template
+    assert validate_cover_letter_template(DEFAULT_TEMPLATE) == []
+
+
 def test_no_placeholder_template_text_in_any_committed_template():
     """Guards against the placeholder cover-letter scaffold ever shipping
     in a template again, in any of the bundled .docx templates."""

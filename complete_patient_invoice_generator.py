@@ -897,13 +897,11 @@ class PatientInvoiceGenerator:
             placeholder_values = [
                 patient.first_name or '',
                 patient.last_name or '',
-                f"{patient.first_name} {patient.last_name}".strip(),
                 patient.address_line1 or '',
                 patient.address_line2 or '',
                 patient.city or '',
                 patient.state or '',
                 display_postal or '',
-                patient.prn or '',
             ]
             replacements = dict(zip(REQUIRED_TEMPLATE_PLACEHOLDERS, placeholder_values))
             self._replace_placeholders_in_docx(doc, replacements)
