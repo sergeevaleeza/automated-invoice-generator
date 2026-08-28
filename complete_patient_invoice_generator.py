@@ -86,10 +86,11 @@ class PatientInvoiceGenerator:
     NOTICE_ESCALATION_DAYS = 14
 
     # Reminder letter templates for escalated notices, keyed by NOTICE_LEVEL_*
-    # (replaces the normal cover letter for these patients). Converted from
-    # the clinic's real Word mail-merge .doc originals (kept alongside, for
-    # reference) to single-record .docx files using this app's [Bracket]
-    # placeholder convention instead of Word MERGEFIELD codes.
+    # (generated alongside, not instead of, the envelope for these patients
+    # — see generate_invoices()). Converted from the clinic's real Word
+    # mail-merge .doc originals (kept alongside, for reference) to
+    # single-record .docx files using this app's [Bracket] placeholder
+    # convention instead of Word MERGEFIELD codes.
     NOTICE_TEMPLATE_FILES = {
         NOTICE_LEVEL_SECOND: Path(__file__).parent / "templates" / "TEMPLATE_MAIL_MERGE_1st_level_YYYYMMDD.docx",
         NOTICE_LEVEL_FINAL: Path(__file__).parent / "templates" / "TEMPLATE_MAIL_MERGE_2nd_level_YYYYMMDD.docx",
@@ -964,13 +965,13 @@ class PatientInvoiceGenerator:
 
     def _generate_notice_letter(self, patient: PatientData, notice_level: int,
                                  amount_due: float, output_path: Path):
-        """Generate the 2nd/Final Notice reminder letter DOCX — replaces the
-        normal cover letter for a patient the user chose to send a notice
-        to instead of skipping (see generate_invoices()'s
-        notice_patient_levels param). Uses NOTICE_TEMPLATE_FILES, which
-        already contain the clinic's real letter wording with [Full Name] /
-        [Date] / [Amount] placeholders (converted from the original Word
-        mail-merge .doc templates)."""
+        """Generate the 2nd/Final Notice reminder letter DOCX, written to its
+        own file — alongside the envelope, not instead of it — for a
+        patient the user chose to send a notice to instead of skipping
+        (see generate_invoices()'s notice_patient_levels param). Uses
+        NOTICE_TEMPLATE_FILES, which already contain the clinic's real
+        letter wording with [Full Name] / [Date] / [Amount] placeholders
+        (converted from the original Word mail-merge .doc templates)."""
         try:
             if output_path.exists():
                 output_path.unlink()
@@ -1169,8 +1170,10 @@ class PatientInvoiceGenerator:
         lines.append("-" * 40)
         lines.append("For each processed patient:")
         lines.append("  - PDF and/or Excel Invoice: LastName_Year_Invoice_mmddyyyy.pdf/.xlsx")
-        lines.append("  - Cover Letter: LastName_Envelope.docx")
+        lines.append("  - Envelope: LastName_Envelope.docx")
         lines.append("  - CSV Items: LastName_Year_InvoiceItems_mmddyyyy.csv")
+        lines.append("  - For 2nd/Final Notice patients, also: LastName_2nd_notice_letter_mmddyyyy.docx")
+        lines.append("    or LastName_final_notice_letter_mmddyyyy.docx")
         lines.append("")
 
         lines.append("=" * 80)
@@ -1391,10 +1394,11 @@ class PatientInvoiceGenerator:
         NOTICE_LEVEL_SECOND/FINAL — patients the user chose to send an
         escalated notice to (instead of skipping or a normal invoice)
         after a duplicate-invoice warning. Changes the PDF/Excel statement
-        title and replaces the normal cover letter with the matching
-        reminder letter (see _generate_notice_letter()). A name in both
-        skip_patient_names and notice_patient_levels is skipped — skip
-        wins, since it's the more conservative choice.
+        title and additionally generates the matching reminder letter
+        (see _generate_notice_letter()) as its own dated file — the
+        envelope is still generated normally for these patients too. A
+        name in both skip_patient_names and notice_patient_levels is
+        skipped — skip wins, since it's the more conservative choice.
         validation_report: the pre-flight ValidationReport for this same
         roster/invoice pair, if the caller already ran one — included in
         the batch summary (file + UI) for a single combined view. Purely
@@ -1497,14 +1501,22 @@ class PatientInvoiceGenerator:
                                                self.statement_date, self.payment_due_date,
                                                has_cpt, xlsx_path, notice_level=notice_level)
 
-                    # DOCX envelope only — no date suffix, overwrites previous copy.
-                    # A patient receiving an escalated notice gets the matching
-                    # reminder letter instead of the normal cover letter.
+                    # DOCX envelope — always generated, no date suffix,
+                    # overwrites previous copy. Every patient gets one,
+                    # notice level or not.
                     envelope_docx_path = patient_dir / f"{self._sanitize_filename(file_patient.last_name)}_Envelope.docx"
-                    if notice_level == NOTICE_LEVEL_NORMAL:
-                        self._generate_cover_letter(file_patient, template_file, envelope_docx_path)
-                    else:
-                        self._generate_notice_letter(file_patient, notice_level, total_due, envelope_docx_path)
+                    self._generate_cover_letter(file_patient, template_file, envelope_docx_path)
+
+                    # A patient receiving an escalated notice ALSO gets the
+                    # matching reminder letter, as its own dated file —
+                    # never routed into the envelope's path.
+                    notice_letter_path = None
+                    if notice_level != NOTICE_LEVEL_NORMAL:
+                        notice_suffix = "2nd_notice_letter" if notice_level == NOTICE_LEVEL_SECOND else "final_notice_letter"
+                        notice_letter_path = patient_dir / (
+                            f"{self._sanitize_filename(file_patient.last_name)}_{notice_suffix}_{date_str}.docx"
+                        )
+                        self._generate_notice_letter(file_patient, notice_level, total_due, notice_letter_path)
 
                     if generate_csv:
                         csv_path = patient_dir / f"{base_name}_InvoiceItems_{date_str}.csv"
@@ -1532,6 +1544,7 @@ class PatientInvoiceGenerator:
                             pdf_path if generate_pdf_invoice else None,
                             xlsx_path if generate_excel_invoice_file else None,
                             envelope_docx_path,
+                            notice_letter_path,
                             csv_path if generate_csv else None,
                         ) if p is not None]
                         run_history.record_invoice_run(

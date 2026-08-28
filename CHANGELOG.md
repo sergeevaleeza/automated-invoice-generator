@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] — Notice patients: generate the envelope too; give the notice letter its own file (2026-08-28)
+
+### Fixed
+
+#### 1. Notice letter was overwriting the envelope, not accompanying it
+- `generate_invoices()`'s per-patient loop wrote the 2nd/Final Notice reminder letter straight to `LastName_Envelope.docx` — the same path the real #10 envelope uses — for any patient with a notice level. The envelope was never generated for these patients at all; the file that should have been an envelope was actually the notice letter's body text. Confirmed via a generated `Alcobendas_Envelope.docx`: a Letter-size page reading "…outstanding balance over $210.00 … contact us within 14 days … Sincerely, Michael Levinson, MD" — not a #10 envelope.
+- Fixed: the envelope (`_generate_cover_letter()` against `templates/Access_Multi_Letter_Cover.docx`) now always runs for every patient, notice level or not. A notice patient additionally gets `_generate_notice_letter()` written to its own file — `LastName_2nd_notice_letter_MMDDYYYY.docx` or `LastName_final_notice_letter_MMDDYYYY.docx` (`MMDDYYYY` = the same statement-date format the invoice/CSV filenames already use) — never routed through the envelope's path. Non-notice patients are unaffected: envelope only, as before.
+- `run_history`'s recorded filenames now include both the envelope and the notice letter for a notice patient (previously only whichever one had overwritten the other got recorded, mislabeled as "the envelope").
+- Updated `PatientInvoiceGenerator.NOTICE_TEMPLATE_FILES`'s and `_generate_notice_letter()`'s docstrings, and `generate_invoices()`'s `notice_patient_levels` docstring, which all described the old (wrong) "replaces the envelope" behavior. Also corrected the plain-text summary report's "FILES GENERATED" section, which called the envelope a "Cover Letter" and didn't mention the notice-letter file at all.
+
+#### 2. Tests
+- Rewrote `tests/test_notice_letters.py::TestGenerateInvoicesNoticeIntegration`'s notice-patient test to assert both files exist as separate, correctly-named, correctly-contentful outputs (the envelope must NOT contain notice-letter body text, proving it wasn't overwritten) and that `run_history` records both filenames. Added an equivalent Final Notice test (`LastName_final_notice_letter_MMDDYYYY.docx`) and strengthened the normal-patient test to assert no `*_notice_letter_*.docx` file exists at all for a non-notice patient. Full suite (115/115) confirmed unaffected otherwise; verified end-to-end against a synthetic Alcobendas-style 2nd-notice patient through the real `generate_invoices()` pipeline with the real clinic templates — `Alcobendas_Envelope.docx` is a genuine #10 landscape envelope (13680×5947 DXA, clinic return address + patient delivery address, no letter body) and `Alcobendas_2nd_notice_letter_08282026.docx` carries the actual reminder-letter content.
+
 ## [Unreleased] — Fix QR overflow onto PDF page 2, and Excel QR overlapping the header (2026-08-28)
 
 Three bugs surfaced by a real long/large-balance invoice (Balestieri), all stemming from the

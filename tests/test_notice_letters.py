@@ -239,7 +239,11 @@ class TestValidationSuggestsNoticeLevel:
 
 
 class TestGenerateInvoicesNoticeIntegration:
-    def test_notice_patient_generates_letter_and_records_level(self, generator, minimal_template, roster_and_invoice, tmp_path):
+    def test_notice_patient_gets_envelope_and_notice_letter_as_separate_files(
+            self, generator, minimal_template, roster_and_invoice, tmp_path):
+        """The envelope must always be generated — including for notice
+        patients — and the notice letter must land in its own dated file,
+        never overwriting the envelope's path."""
         roster_path, invoice_path = roster_and_invoice
         db_path = tmp_path / "run_history.db"
         output_dir = tmp_path / "output"
@@ -251,15 +255,47 @@ class TestGenerateInvoicesNoticeIntegration:
         )
         assert summary.total_processed == 1
 
+        # The envelope: generated from minimal_template (a blank docx), so
+        # it must NOT contain the notice letter's body text — proves the
+        # notice letter isn't the thing that landed at this path.
         envelope_paths = list(output_dir.rglob("*_Envelope.docx"))
         assert len(envelope_paths) == 1
-        text = "\n".join(p.text for p in Document(envelope_paths[0]).paragraphs)
-        assert "Galina Lerner" in text
-        assert "contact us within 14 days" in text  # the 2nd-level letter's own text
+        envelope_text = "\n".join(p.text for p in Document(envelope_paths[0]).paragraphs)
+        assert "contact us within 14 days" not in envelope_text
+
+        # The notice letter: its own dated file, with the real letter body.
+        notice_paths = list(output_dir.rglob("*_2nd_notice_letter_*.docx"))
+        assert len(notice_paths) == 1
+        assert notice_paths[0].name == f"Lerner_2nd_notice_letter_{generator.statement_date.strftime('%m%d%Y')}.docx"
+        notice_text = "\n".join(p.text for p in Document(notice_paths[0]).paragraphs)
+        assert "Galina Lerner" in notice_text
+        assert "contact us within 14 days" in notice_text
 
         key = run_history.patient_key("1", "Galina", "Lerner")
         overlaps = run_history.find_overlapping_runs(key, "2025-06-10", "2026-02-16", db_path=db_path)
         assert overlaps[0].notice_level == NOTICE_LEVEL_SECOND
+        assert envelope_paths[0].name in overlaps[0].filenames
+        assert notice_paths[0].name in overlaps[0].filenames
+
+    def test_final_notice_patient_gets_envelope_and_final_notice_letter(
+            self, generator, minimal_template, roster_and_invoice, tmp_path):
+        roster_path, invoice_path = roster_and_invoice
+        db_path = tmp_path / "run_history.db"
+        output_dir = tmp_path / "output"
+
+        generator.generate_invoices(
+            roster_file=roster_path, invoice_file=invoice_path, template_file=minimal_template,
+            output_dir=str(output_dir), generate_csv=False, export_format="pdf",
+            run_history_db_path=db_path, notice_patient_levels={"Lerner, Galina": NOTICE_LEVEL_FINAL},
+        )
+
+        assert len(list(output_dir.rglob("*_Envelope.docx"))) == 1
+        notice_paths = list(output_dir.rglob("*_final_notice_letter_*.docx"))
+        assert len(notice_paths) == 1
+        assert notice_paths[0].name == f"Lerner_final_notice_letter_{generator.statement_date.strftime('%m%d%Y')}.docx"
+        notice_text = "\n".join(p.text for p in Document(notice_paths[0]).paragraphs)
+        assert "final notice" in notice_text.lower()
+        assert "collection agency" in notice_text.lower()
 
     def test_normal_patient_still_gets_cover_letter(self, generator, minimal_template, roster_and_invoice, tmp_path):
         """A patient not present in notice_patient_levels or skip_patient_names
@@ -277,6 +313,10 @@ class TestGenerateInvoicesNoticeIntegration:
         key = run_history.patient_key("1", "Galina", "Lerner")
         overlaps = run_history.find_overlapping_runs(key, "2025-06-10", "2026-02-16", db_path=db_path)
         assert overlaps[0].notice_level == NOTICE_LEVEL_NORMAL
+
+        # Only the envelope — no notice-letter file for a normal patient.
+        assert len(list(output_dir.rglob("*_Envelope.docx"))) == 1
+        assert list(output_dir.rglob("*_notice_letter_*.docx")) == []
 
     def test_skip_wins_over_notice_when_patient_in_both(self, generator, minimal_template, roster_and_invoice, tmp_path):
         roster_path, invoice_path = roster_and_invoice
